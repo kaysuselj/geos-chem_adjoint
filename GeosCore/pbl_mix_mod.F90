@@ -474,6 +474,12 @@ CONTAINS
     USE State_Grid_Mod, ONLY : GrdState
     USE State_Met_Mod,  ONLY : MetState
     USE Time_Mod,       ONLY : Get_Ts_Conv
+#ifdef ADJOINT   
+    USE ESMF
+#endif    
+
+    
+    
 !
 ! !INPUT PARAMETERS:
 !
@@ -520,6 +526,17 @@ CONTAINS
     ! Strings
     CHARACTER(LEN=255) :: ErrMsg, ThisLoc
 
+    ! whether will do vertical mixing of chemical species, (false) if running adjoint 
+    LOGICAL            :: do_vertmix = .TRUE.
+
+#ifdef ADJOINT
+    LOGICAL            :: isAdjoint
+    INTEGER            :: NFD
+    REAL(ESMF_KIND_R8),POINTER   :: Adj3D(:,:,:)
+    REAl               :: ADJS
+#endif
+
+
     ! Pointers
     REAL(fp),      POINTER  :: AD  (:,:,:  )
     TYPE(SpcConc), POINTER  :: TC  (:      )
@@ -562,6 +579,19 @@ CONTAINS
     !$OMP PARALLEL DO       &
     !$OMP DEFAULT( SHARED ) &
     !$OMP PRIVATE( I, J, L, NA, N, AA, CC, CC_AA, DTC )
+
+
+#ifdef ADJOINT
+      isAdjoint=Input_Opt%is_Adjoint ! define LOGICAL: isAdjoint
+
+        IF (isAdjoint) THEN
+           do_vertmix=.FALSE.
+           NFD=Input_Opt%NFD 
+           Adj3D => State_Chm%SpeciesAdj(:,:,:,NFD) 
+        ENDIF
+#endif
+
+
     DO J = 1, State_Grid%NY
     DO I = 1, State_Grid%NX
 
@@ -578,6 +608,37 @@ CONTAINS
        L  = IMIX(I,J)
        AA = AA + AD(I,J,L) * FPBL(I,J)
 
+
+#ifdef ADJOINT
+! For simplicity assume that A = 1 (which is currently hard-coded)
+
+      IF (isAdjoint) THEN
+
+      ! Sum adjoint values from surface to the top of PBL	 
+         ADJS = 0.e+0_fp  
+         DO L = 1, IMIX(I,J)-1
+          ADJS = ADJS + Adj3D(I,J,L) 
+         ENDDO
+     ! Then also add mass from (I,J,L) which straddle the PBL top
+        L     = IMIX(I,J)
+        ADJS    = ADJS + Adj3D(I,J,L) * FPBL(I,J)
+     
+      ! Update adjoint
+      DO L=1,IMIX(I,J)-1
+        Adj3D(I,J,L)=ADJS*AD(I,J,L)/AA
+      ENDDO
+
+     L= IMIX(I,J)
+     Adj3D(I,J,L)=Adj3D(I,J,L)*(1.0_fp -FPBL(I,J)) + &
+                  ADJS*AD(I,J,L)*FPBL(I,J)/AA
+
+
+     ENDIF
+
+#endif
+
+
+       IF (do_vertmix) THEN
        ! Loop over only the advected species
        DO NA = 1, State_Chm%nAdvect
 
@@ -634,6 +695,8 @@ CONTAINS
           TC(N)%Conc(I,J,L) = TC(N)%Conc(I,J,L) + DTC / AD(I,J,L)
 
        ENDDO
+     ENDIF
+    
     ENDDO
     ENDDO
     !$OMP END PARALLEL DO
@@ -641,6 +704,10 @@ CONTAINS
     ! Free pointers
     AD   => NULL()
     TC   => NULL()
+
+#ifdef adjoint
+   Adj3D => NULL()
+#endif 
 
   END SUBROUTINE TurbDay
 !EOC
