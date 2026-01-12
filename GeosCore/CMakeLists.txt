@@ -12,6 +12,14 @@ if(${USE_REAL8})
   endif()
 endif()
 
+
+#-----------------------------------------------------------------------------
+# Add the Tapenade subdirectory here so its library is defined
+#-----------------------------------------------------------------------------
+add_subdirectory(Tapenade)
+
+
+
 #-----------------------------------------------------------------------------
 # Define libGeosCore.a
 #-----------------------------------------------------------------------------
@@ -110,5 +118,6 @@ target_link_libraries(GeosCore PUBLIC
   $<$<BOOL:${APM}>:APM>       # depends on APM iff APM is true
   $<$<BOOL:${RRTMG}>:GeosRad> # depends on GeosRad iff RRTMG is true
   $<$<BOOL:${GTMM}>:Hg>       # depends on Hg iff GTMM is true
+  PRIVATE tapenade_runtime
 
 )

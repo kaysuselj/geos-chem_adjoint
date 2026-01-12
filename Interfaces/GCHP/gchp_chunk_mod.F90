@@ -256,6 +256,29 @@ CONTAINS
 
 
 #ifdef ADJOINT
+
+    ! COMMENTS ON ADJOINT NAMELIST OPTIONS:
+    !
+    ! NFD - defines the species to be perturbed or adjointed (i.e. 'CO2') 
+    ! 
+    ! FORWARD SIMULATION:
+    ! - Design experiments for validation of adjoint sensitivities (if FD_STEP=1 or 2)
+    ! - FD_TYPE define define how the perturbation is applied:
+    !    - FD_TYPE='GLOBAL' - perturb all grid cells by a small amount
+    !    - FD_TYPE='SPOT' - perturb a single grid cell (defined by IFD/JFD/LFD or FD_LAT/FD_LON,LFD)
+    !    - FD_TYPE='LAYER' - perturb all grid cells in a given layer (defined by LFD)
+    ! - FD_STEP defines the perturbation magnitude:
+    !    - FD_STEP=1  - increase initial concentration by 10% 
+    !    - FD_STEP=2  - decrease initial concentration by 10%
+    !
+    ! ADJOINT SIMULATION:
+    ! - FD_TYPE defines the initial adjoint variable:
+    !  - FD_TYPE='GLOBAL' AND - Adjoint is 1 for all grid cells (for species NFD)
+    !  - FD_TYPE='LAYER' - Adjoint is 1 for all grid cells (for species NFD) at layer LFD
+    !  - FD_TYPE='SPOT' - Adjoint is 1 for grid cell (IFD,JFD,LFD) or closest to (FD_LAT,FD_LON,LFD) 
+    !
+    !
+    ! 
     ! Are we running the adjoint?
     call ESMF_ConfigGetAttribute(CF, ModelPhase,            &
                                  Label="MODEL_PHASE:" ,         &
@@ -274,10 +297,19 @@ CONTAINS
 
     Input_Opt%IS_FD_GLOBAL = TRIM(To_UpperCase(FD_TYPE(1:4))) == 'GLOB'
     Input_Opt%IS_FD_SPOT   = TRIM(To_UpperCase(FD_TYPE(1:4))) == 'SPOT'
-    IF (MAPL_Am_I_Root()) THEN
-       WRITE(*,1091) TRIM(FD_TYPE), Input_Opt%IS_FD_GLOBAL, Input_Opt%IS_FD_SPOT
-    ENDIF
-1091   FORMAT('FD_TYPE = ', a6, ', FD_GLOB = ', L1, ', FD_SPOT = ', L1)
+    Input_Opt%IS_FD_LAYER  = TRIM(To_UpperCase(FD_TYPE(1:4))) == 'LAYE'
+
+    call WRITE_PARALLEL('FD_TYPE IS:'//FD_TYPE)
+    IF (Input_Opt%IS_FD_GLOBAL)  call WRITE_PARALLEL('FD_TYPE: GLOB')
+    IF (Input_Opt%IS_FD_SPOT)  call WRITE_PARALLEL('FD_TYPE: SPOT')
+    IF (Input_Opt%IS_FD_LAYER)  call WRITE_PARALLEL('FD_TYPE: LAYER')
+
+
+    ! THAT DOES NOT SEEM TO BE WORKING
+   ! IF (MAPL_Am_I_Root()) THEN
+   !    WRITE(*,1091) TRIM(FD_TYPE), Input_Opt%IS_FD_GLOBAL, Input_Opt%IS_FD_SPOT, Input_Opt%IS_FD_LAYER
+   ! ENDIF
+!1091   FORMAT('FD_TYPE = ', a6, ', FD_GLOB = ', L1, ', FD_SPOT = ', L1, ', FD_LAYER = ', L1)
 
 
 
@@ -301,6 +333,8 @@ CONTAINS
        ELSE
           NFD = Ind_(FD_SPEC)
        ENDIF
+
+      call WRITE_PARALLEL('FD_SPEC'//FD_SPEC)
 
        call ESMF_ConfigGetAttribute(CF, IFD, &
             Label="IFD:", default=-1, RC=STATUS)
@@ -376,8 +410,10 @@ CONTAINS
        Input_Opt%NFD = NFD
 
        call ESMF_ConfigGetAttribute(CF, LFD, &
-            Label="LFD:", RC=STATUS)
+            Label="LFD:",default=0, RC=STATUS)
        _VERIFY(STATUS)
+       PRINT *, "LFD:",LFD
+       !_ASSERT((Input_Opt%IS_FD_LAYER .and. (LFD .eq. 0)), 'FD_LAYER requires LFD to be set and positive in GCHP.rc')
 
        Input_Opt%LFD = LFD
 
@@ -801,6 +837,20 @@ CONTAINS
        _VERIFY(STATUS)
     endif
 
+
+
+!#ifdef ADJOINT
+!  CALL Print_Global_Species_Kg( I_DBG, J_DBG, L_DBG,           &
+!                                       'CO2', Input_Opt, State_Chm,   &
+!                                       State_Grid, State_Met, trim(Iam) // &
+!                                       'beginning of GCHP chunk', RC)
+!#endif
+
+    if (Input_Opt%amIRoot) then
+       print *,'Kay CO2 concentration at start of chunk_run',State_Chm%Species(3)%Conc(6,5,1)
+       endif
+
+
     !=======================================================================
     ! Define processes to be covered in this phase
     !
@@ -897,6 +947,19 @@ CONTAINS
        Call Input_Opt%lgr%info('DoWetDep : %l1', DoWetDep)
     ENDIF
 
+
+    if (Input_Opt%amIRoot) then
+       print *,'Kay CO2 concentration at start of chunk_run,1',State_Chm%Species(3)%Conc(6,5,1)
+       print *,'Kay print surface pressures:'
+       print *, 'PSC2_WET', State_Met%PSC2_WET(I_DBG,J_DBG)
+       print *, 'PSC2_DRY', State_Met%PSC2_DRY(I_DBG,J_DBG)
+       print *, 'PS1_WET',  State_Met%PS1_WET(I_DBG,J_DBG)
+       print *, 'PS1_DRY',  State_Met%PS1_DRY(I_DBG,J_DBG)
+       print *, 'PS2_WET',  State_Met%PS2_WET(I_DBG,J_DBG)
+       print *, 'PS2_DRY',  State_Met%PS2_DRY(I_DBG,J_DBG)
+
+    endif
+
     !-------------------------------------------------------------------------
     ! Pre-Run assignments
     !-------------------------------------------------------------------------
@@ -947,6 +1010,31 @@ CONTAINS
     CALL SET_FLOATING_PRESSURES( State_Grid, State_Met, RC )
     IF ( RC /= GC_SUCCESS ) RETURN
 
+    if (Input_Opt%amIRoot) then
+       print *,'Kay CO2 concentration at start of chunk_run,2',State_Chm%Species(3)%Conc(6,5,1)
+       print *,'Date/time',nymd,nhms,year,month,day,hour,minute 
+      endif
+
+
+
+
+!
+! Kay - print global concentrations before AirQnt
+!
+
+#ifdef ADJOINT
+!  CALL Print_Global_Species_Kg( I_DBG, J_DBG, L_DBG,           &
+!                                       'CO2', Input_Opt, State_Chm,   &
+!                                       State_Grid, State_Met, trim(Iam) // &
+!                                       ' before AirQnt', RC)
+
+    CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
+         State_Grid, State_Met,State_Chm, trim(Iam) // ' before airqn unit conversion.', RC)
+
+#endif
+
+
+
     ! Define airmass and related quantities
 #if defined( MODEL_GEOS )
     CALL AirQnt( Input_Opt, State_Chm, State_Grid, State_Met, RC, .FALSE. )
@@ -960,18 +1048,26 @@ CONTAINS
        CALL ESMF_AttributeGet( IntField, NAME="RESTART", VALUE=RST, RC=STATUS )
        _VERIFY(STATUS)
        IF ( .not. ( RST == MAPL_RestartBootstrap .OR. &
-                    RST == MAPL_RestartSkipInitial ) ) scaleMR = .TRUE.
-       CALL AirQnt( Input_Opt, State_Chm, State_Grid, State_Met, RC, scaleMR )
+               RST == MAPL_RestartSkipInitial ) ) scaleMR = .TRUE.
+      CALL AirQnt( Input_Opt, State_Chm, State_Grid, State_Met, RC, scaleMR )
        scaleMR = .TRUE.
     ELSE
        CALL AirQnt( Input_Opt, State_Chm, State_Grid, State_Met, RC, scaleMR )
     ENDIF
 #endif
 
+    if (Input_Opt%amIRoot) then
+       print *,'Kay CO2 concentration at start of chunk_run,3',State_Chm%Species(3)%Conc(6,5,1)
+       endif
+
     ! Initialize/reset wetdep after air quantities computed
     IF ( DoConv .OR. DoChem .OR. DoWetDep ) THEN
        CALL SETUP_WETSCAV( Input_Opt, State_Chm, State_Grid, State_Met, RC )
     ENDIF
+
+    if (Input_Opt%amIRoot) then
+       print *,'Kay CO2 concentration at start of chunk_run,4',State_Chm%Species(3)%Conc(6,5,1)
+       endif
 
     ! Cap the polar tropopause pressures at 200 hPa, in order to avoid
     ! tropospheric chemistry from happening too high up (cf. J. Logan)
@@ -979,6 +1075,11 @@ CONTAINS
                                   State_Grid     = State_Grid, &
                                   State_Met      = State_Met,  &
                                   RC             = RC         )
+
+
+    if (Input_Opt%amIRoot) then
+       print *,'Kay CO2 concentration at start of chunk_run,5',State_Chm%Species(3)%Conc(6,5,1)
+       endif
 
     ! Update clock tracer if relevant
     IF (  IND_('CLOCK','A') > 0 ) THEN
@@ -988,6 +1089,10 @@ CONTAINS
     ! Call PBL quantities. Those are always needed
     CALL Compute_Pbl_Height( Input_Opt, State_Grid, State_Met, RC )
     _ASSERT(RC==GC_SUCCESS, 'Error calling COMPUTE_PBL_HEIGHT')
+
+    if (Input_Opt%amIRoot) then
+       print *,'Kay CO2 concentration before unit conversion',State_Chm%Species(3)%Conc(6,5,1)
+       endif
 
     ! Convert to dry mixing ratio
     CALL Convert_Spc_Units(                                                  &
@@ -999,6 +1104,10 @@ CONTAINS
          previous_units = previous_units,                                    &
          RC             = RC                                                )
     _ASSERT(RC==GC_SUCCESS, 'Error calling CONVERT_SPC_UNITS')
+
+  if (Input_Opt%amIRoot) then
+  print *,'Kay CO2 concentration after unit conversion',State_Chm%Species(3)%Conc(6,5,1)
+  endif
 
     !=======================================================================
     ! Always prescribe H2O in both the stratosphere and troposhere in GEOS.
@@ -1038,8 +1147,9 @@ CONTAINS
                                        State_Grid, State_Met, trim(Iam) // &
                                        ' before first unit conversion', RC)
     CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
-         State_Grid, State_Met, trim(Iam) // ' before first unit conversion.', RC)
+         State_Grid, State_Met,State_Chm, trim(Iam) // ' before first unit conversion.', RC)
 
+    ! SPOT PERTURBATION 
     IF (first .and. Input_Opt%IS_FD_SPOT_THIS_PET .and.  Input_Opt%IS_FD_SPOT) THEN
        FD_SPEC = transfer(state_chm%SpcData(Input_Opt%NFD)%Info%Name, FD_SPEC)
        IFD = Input_Opt%IFD
@@ -1080,6 +1190,7 @@ CONTAINS
        ENDIF
     ENDIF
 
+    ! GLOBAL PERTURBATION
     IF (first .and. Input_Opt%IS_FD_GLOBAL) THEN
        FD_SPEC = transfer(state_chm%SpcData(Input_Opt%NFD)%Info%Name, FD_SPEC)
        NFD = Input_Opt%NFD
@@ -1106,22 +1217,44 @@ CONTAINS
           IF (Input_Opt%IS_FD_SPOT_THIS_PET) &
                WRITE (*, 1017) TRIM(FD_SPEC), State_Chm%Species(NFD)%Conc(IFD,JFD,LFD)
        ELSE
-          state_chm%SpeciesAdj(:,:,:,:) = 0d0
-          IF (NFD > 0) THEN
-             IF (LFD > 0) THEN
-                IF (Input_opt%amIRoot) THEN
-                   WRITE(*,*) ' Setting Level ', LFD, ' forcing to 1'
-                ENDIF
-                state_chm%SpeciesAdj(:,:,LFD,NFD) = 1d0
-             ELSE
-                IF (Input_opt%amIRoot) THEN
+            state_chm%SpeciesAdj(:,:,:,:) = 0d0
+            IF (Input_opt%amIRoot) THEN
                    WRITE(*,*) ' Setting all forcing to 1'
                 ENDIF
-                state_chm%SpeciesAdj(:,:,:,NFD) = 1d0
-             ENDIF
-          ENDIF
+            state_chm%SpeciesAdj(:,:,:,NFD) = 1d0 
        ENDIF
     ENDIF
+   
+   ! LAYER PERTURBATION
+
+  IF (first .and. Input_Opt%IS_FD_LAYER) THEN
+      ! FD_SPEC = transfer(state_chm%SpcData(Input_Opt%NFD)%Info%Name, FD_SPEC)    
+      NFD = Input_Opt%NFD
+      LFD = Input_Opt%LFD 
+      IF (.not. Input_Opt%IS_ADJOINT) THEN
+          IF (Input_Opt%FD_STEP .eq. 0) THEN
+             call WRITE_PARALLEL('Not perturbing')
+          ELSEIF (Input_Opt%FD_STEP .eq. 1) THEN
+             call WRITE_PARALLEL('Perturbing +0.1')
+             State_Chm%Species(NFD)%Conc(:,:,LFD) = State_Chm%Species(NFD)%Conc(:,:,LFD) * 1.1d0
+          ELSEIF (Input_Opt%FD_STEP .eq. 2) THEN
+             call WRITE_PARALLEL('Perturbing -0.1')
+             State_Chm%Species(NFD)%Conc(:,:,LFD) = State_Chm%Species(NFD)%Conc(:,:,LFD) * 0.9d0
+          ELSE
+             WRITE(*, *) '    FD_STEP = ', Input_Opt%FD_STEP, ' NOT SUPPORTED!'
+          ENDIF
+       ELSE ! IF IT IS ADJOINT (.not. Input_Opt%IS_ADJOINT) THEN
+            state_chm%SpeciesAdj(:,:,:,:) = 0d0
+   
+            IF (Input_opt%amIRoot) THEN
+               WRITE(*,*) ' Setting all forcing to 1'
+            ENDIF
+            state_chm%SpeciesAdj(:,:,LFD,NFD) = 1d0
+   
+      ENDIF ! (.not. Input_Opt%IS_ADJOINT) 
+    ENDIF ! (first .and. Input_Opt%IS_FD_LAYER)
+   
+   ! LAYER PERTURBATION
 
 1017 FORMAT('       SPC(', a10, ', FD_SPOT) = ', e22.10)
 1018   FORMAT('   SPC_ADJ(', a10, ', FD_SPOT) = ', e22.10)
@@ -1142,10 +1275,19 @@ CONTAINS
     ! and the HEMCO data list. Should be called every time to make sure
     ! that the HEMCO clock and the HEMCO data list are up to date.
     !=======================================================================
+   
+     if (Input_Opt%amIRoot) then  
+      print *,'Kay CO2 concentration before emissions',State_Chm%Species(3)%Conc(6,5,1)
+      endif
+
     HCO_PHASE = 1
     CALL EMISSIONS_RUN( Input_Opt, State_Chm, State_Diag, &
                         State_Grid, State_Met, DoEmis, HCO_PHASE, RC  )
     _ASSERT(RC==GC_SUCCESS, 'Error calling EMISSIONS_RUN')
+
+    if (Input_Opt%amIRoot) then
+        print *,'Kay CO2 concentration after emissions',State_Chm%Species(3)%Conc(6,5,1)
+    endif    
 
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 !!!                                PHASE 1 or -1                           !!!
@@ -1655,8 +1797,9 @@ CONTAINS
           ! Find the non-adjoint variable or this
           TRACNAME = ThisSpc%Name
 
-          State_Chm%SpeciesAdj(:,:,:,N) = State_Chm%SpeciesAdj(:,:,:,N) * State_Chm%Species(N)%Conc(:,:,:) * &
-               ( AIRMW / State_Chm%SpcData(N)%Info%MW_g )
+         ! Kay's comment - not sure we really want to multiply adjoint with the ICS 
+         ! State_Chm%SpeciesAdj(:,:,:,N) = State_Chm%SpeciesAdj(:,:,:,N) * State_Chm%Species(N)%Conc(:,:,:) * &
+         !      ( AIRMW / State_Chm%SpcData(N)%Info%MW_g )
 
           if (Input_Opt%IS_FD_SPOT_THIS_PET .and. Input_Opt%IFD > 0) THEN
              write(*,*) 'After conversion ',  &
@@ -1694,6 +1837,14 @@ CONTAINS
     ! First call is done
     FIRST = .FALSE.
 
+#ifdef ADJOINT
+  CALL Print_Global_Species_Kg( I_DBG, J_DBG, L_DBG,           &
+                                       'CO2', Input_Opt, State_Chm,   &
+                                       State_Grid, State_Met, trim(Iam) // &
+                                       'end of GCHP chunk', RC)
+#endif
+
+
     ! Return success
     RC = GC_SUCCESS
 
@@ -1702,7 +1853,7 @@ CONTAINS
 
 !BOP
   SUBROUTINE GCHP_PRINT_MET(I, J, L,         &
-       Input_Opt, State_Grid, State_Met, LOC, RC )
+       Input_Opt, State_Grid, State_Met,State_Chm,LOC, RC )
 
     !
     ! !USES:
@@ -1710,6 +1861,8 @@ CONTAINS
     USE State_Met_Mod,        ONLY : MetState
     USE Input_Opt_Mod,        ONLY : OptInput
     USE State_Grid_Mod,       ONLY : GrdState
+    USE State_Chm_Mod,        ONLY : ChmState, Ind_
+    USE Species_Mod,          ONLY : Species
 
     !
     ! !INPUT PARAMETERS:
@@ -1721,6 +1874,8 @@ CONTAINS
     TYPE(OptInput),   INTENT(IN)    :: Input_Opt ! Input Options object
     TYPE(GrdState),   INTENT(IN)    :: State_Grid! Grid State object
     TYPE(MetState),   INTENT(IN)    :: State_Met ! Meteorology State object
+    TYPE(ChmState),   INTENT(IN)    :: State_Chm
+    
     !
     ! !INPUT/OUTPUT PARAMETERS:
     !
@@ -1739,7 +1894,8 @@ CONTAINS
     ! !LOCAL VARIABLES:
     !
     CHARACTER(LEN=255) :: ErrorMsg, ThisLoc
-
+    INTEGER ::  N,IND
+    TYPE(Species), POINTER :: ThisSpc=>NULL()
 
     !=========================================================================
     ! GCHP_PRINT_MET begins here!
@@ -1782,6 +1938,16 @@ CONTAINS
        WRITE( 6, 115 ) 'AD',       State_Met%AD(I,J,L),        I, J, L
        WRITE( 6, 115 ) 'PREVSPHU', State_Met%SPHU_PREV(I,J,L), I, J, L
        WRITE( 6, 115 ) 'SPHU',     State_Met%SPHU(I,J,L),      I, J, L
+       ! 3-D Chem fields
+       DO N=1,State_Chm%nSpecies
+        ThisSpc=>State_Chm%SpcData(N)%Info
+        IND=IND_(TRIM(ThisSpc%Name))
+         WRITE (6, 115),TRIM(ThisSpc%NAME),State_Chm%Species(IND)%Conc(I,J,L),&
+              I,J,L 
+       ENDDO
+       
+       
+       
        ! terminator
        WRITE( 6, 120 )
     ENDIF

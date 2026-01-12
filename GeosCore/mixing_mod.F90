@@ -107,6 +107,9 @@ CONTAINS
     ! Set OnlyAbovePBL flag (used below by DO_TEND) to indicate that
     ! fluxes within the PBL have already been applied.
     ! ----------------------------------------------------------------------
+    !print *,'Kay,turbulence options, LTURB and LNLPBL'
+    !print *, Input_Opt%LTURB, Input_Opt%LNLPBL
+    
     IF ( Input_Opt%LTURB .AND. Input_Opt%LNLPBL ) THEN
 
        !--------------------------------------------------------------------
@@ -118,7 +121,8 @@ CONTAINS
        ! it is now, then we will have stored drydep fluxes up to that height,
        ! so we need to zero these out.)
        !--------------------------------------------------------------------
-
+        
+       !print *,'Kay, do_vdiff'
        ! Non-local mixing
        CALL Do_Vdiff( Input_Opt,  State_Chm, State_Diag,                     &
                       State_Grid, State_Met, RC                             )
@@ -168,6 +172,7 @@ CONTAINS
     !-----------------------------------------------------------------------
     IF ( Input_Opt%LTURB .AND. .NOT. Input_Opt%LNLPBL ) THEN
 
+      ! print *,'Kay, full PBL mixing'     
        ! Full PBL mixing
        CALL Do_Full_Pbl_Mixing( Input_Opt,  State_Chm, State_Diag,            &
                                 State_Grid, State_Met, RC                    )

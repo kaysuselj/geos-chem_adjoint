@@ -17,6 +17,9 @@ MODULE CONVECTION_MOD
 !
   USE PRECISION_MOD    ! For GEOS-Chem Precision (fp)
 
+! Kay to print stuff out
+USE MAPL_CommsMod, only: MAPL_AM_I_ROOT
+
   IMPLICIT NONE
   PRIVATE
 !
@@ -68,6 +71,8 @@ CONTAINS
     USE TIME_MOD,        ONLY : GET_TS_CONV
     USE UnitConv_Mod
     USE WETSCAV_MOD,     ONLY : COMPUTE_F
+
+
 !
 ! !INPUT PARAMETERS:
 !
@@ -163,7 +168,6 @@ CONTAINS
           RETURN
        ENDIF
     ENDIF
-
     !------------------------------------------------------------------------
     ! More initializations
     !------------------------------------------------------------------------
@@ -520,6 +524,9 @@ CONTAINS
     REAL(fp)               :: WET_HgP,     MB,        QB
     REAL(fp)               :: QB_NUM,      DELP_DRY_NUM
 
+    LOGICAL                :: is_forward_run = .true.
+    LOGICAL                :: print_dbg_kay = .false.
+
     ! Strings
     CHARACTER(LEN=255)     :: ErrMsg, ThisLoc
 
@@ -546,6 +553,20 @@ CONTAINS
     REAL(fp),      POINTER :: PRECCON
     TYPE(SpcConc), POINTER :: Spc          (:)
     TYPE(Species), POINTER :: SpcInfo
+
+
+
+#ifdef ADJOINT
+  ! ADJOINT VARIABLE
+  REAL(fp), POINTER :: QB0(:)  
+  INTEGER :: nfd, i_ind
+  REAL(fp) :: qcb, qb_numb, qbb, qc_presb, qc_scavb
+  REAL(fp) :: t1b, t2b, t3b, t4b, tsumb, delqb
+  REAL(fp) :: tempb
+  INTEGER :: ad_count
+  INTEGER*4 :: branch
+#endif
+
 
     !========================================================================
     ! (0)  I n i t i a l i z a t i o n
@@ -684,6 +705,19 @@ CONTAINS
        MB = MB + BMASS(K)
     ENDDO
 
+
+! CHECK IF THIS IS FORWARD OR ADJOINT RUN
+#ifdef ADJOINT
+      is_forward_run=.not. Input_Opt%is_Adjoint 
+#endif 
+
+
+
+   IF (is_forward_run) THEN
+   !
+   ! FORWARD RUN
+   !      
+
     !========================================================================
     ! (1)  A d v e c t e d   S p e c i e s   L o o p
     !========================================================================
@@ -710,6 +744,15 @@ CONTAINS
        IF ( NW > 0 ) THEN
           DIAG38(:,NW) = 0.0_fp
        ENDIF
+
+
+     IF (PRINT_DBG_KAY) THEN  
+     IF(MAPL_AM_I_ROOT()) THEN
+             print *,'forward simulation:'
+             print *,'NA,IC',NA,IC
+             print *,'Concentration:',Q
+     ENDIF        
+     ENDIF
 
        !=====================================================================
        ! (2)  I n t e r n a l   T i m e   S t e p   L o o p
@@ -1404,6 +1447,435 @@ CONTAINS
        Q       => NULL()
        SpcInfo => NULL()
     ENDDO                  ! End loop over advected species
+
+ELSE 
+!   
+! ADJOINT CALCULATION
+! ---- WE ASSUME:
+!   (1) species is not aerosol
+!   (2) there will be no washout
+!   (3) no Hg       
+      NA=Input_Opt%NFD 
+      
+      IC       =  State_Chm%Map_Advect(NA)
+      
+      QB0 =>  State_Chm%SpeciesAdj(I,J,:,NA) 
+      
+      Q => Spc(IC)%Conc(I,J,:) ! Chemical species [mol/mol dry air]
+
+      IF (PRINT_DBG_KAY) THEN
+      IF (MAPL_AM_I_ROOT()) THEN 
+      print *,'Initializing adjoint:'
+      print *,'name of species (probably should be CO2)',State_Chm%SpcData(IC)%Info%Name 
+      print *,'NA,IC:',NA,IC
+      print *,'Concentrations:',Q
+      print *,'Height:',BXHEIGHT
+      print *,'Adjoint variable',QB0
+      ENDIF
+      ENDIF
+
+
+!
+! BASICALLY RUN FORWARD MODEL FOR ONE SPECIES
+!   Q = concentration  that correspond to adjoint species     
+!   NA = index of species in F
+!         
+!-----------------------------------------------------------------
+! Determine location of the cloud base, which is the level where
+! we start to have non-zero convective precipitation formation
+!-----------------------------------------------------------------
+! Minimum value of cloud base is the surface level
+  cldbase = 1
+  ad_count = 1
+! Find the cloud base
+  DO k=1,nlay
+    IF (dqrcu(k) .GT. 0e+0_fp) THEN
+      GOTO 100
+    ELSE
+      ad_count = ad_count + 1
+    END IF
+  END DO
+  CALL PUSHCONTROL1B(0)
+  CALL PUSHINTEGER4(ad_count)
+  GOTO 110
+ 100 CALL PUSHCONTROL1B(1)
+  CALL PUSHINTEGER4(ad_count)
+  cldbase = k
+
+ 110 pdown(:) = (pflcu(:)/1000e+0_fp+pficu(:)/917e+0_fp)*100e+0_fp
+  bmass(:) = delp_dry(:)*g0_100
+
+ IF (PRINT_DBG_KAY)  THEN 
+ IF (MAPL_AM_I_ROOT()) THEN   
+   print *,'kay, forward, ad_count',ad_count
+ ENDIF
+ ENDIF
+
+!-----------------------------------------------------------------
+! Compute MB, the mass per unit area of dry air below the cloud
+! base [kg/m2]. Calculate MB by looping over levels below the
+! cloud base.
+!-----------------------------------------------------------------
+  mb = 0e+0_fp
+  DO k=1,cldbase-1
+    mb = mb + bmass(k)
+  END DO
+
+   ! LOOP OVER INTERNAL TIME STEP
+    DO istep=1,ns
+
+!----------------------------------------------------------
+! B e l o w   C l o u d   B a s e   (K < CLDBASE)
+!           
+   IF (cldbase .GT. 1) THEN
+      IF (cmfmc(cldbase-1) .GT. tinynum) THEN
+!-----------------------------------------------------
+! %%% Non-negligible Cloud mass flux %%%
+!-----------------------------------------------------
+         qb_num = 0e+0_fp
+         CALL PUSHREAL4ARRAY(delp_dry_num, fp/4)
+         delp_dry_num = 0e+0_fp
+
+         DO k=1,cldbase-1
+            qb_num = qb_num + q(k)*delp_dry(k)
+            delp_dry_num = delp_dry_num + delp_dry(k)
+         END DO
+
+         qb = qb_num/delp_dry_num
+                             
+         qc = (mb*qb+cmfmc(cldbase-1)*q(cldbase)*sdt)/(mb+cmfmc(cldbase&
+&           -1)*sdt)
+                    
+         q(1:cldbase-1) = qc
+         CALL PUSHCONTROL2B(2)
+        ELSE !  IF (cmfmc(cldbase-1) .GT. tinynum) THEN
+!-----------------------------------------------------
+! %%% Negligible cloud mass flux %%%
+!-----------------------------------------------------
+! When CMFMC is negligible, then set QC to the species
+! concentration at the cloud base level [kg/kg]
+          qc = q(cldbase)
+          CALL PUSHCONTROL2B(1)
+        END IF !  IF (cmfmc(cldbase-1) .GT. tinynum) THEN
+   ELSE ! IF (cldbase .GT. 1) THEN
+!-----------------------------------------------------
+! If the cloud base happens at level 1, then just
+! set QC to the species concentration at the surface
+! level [kg/kg]
+!-----------------------------------------------------
+      qc = q(cldbase)
+      CALL PUSHCONTROL2B(0)
+   END IF  ! IF (cldbase .GT. 1) THEN
+
+
+!==================================================================
+! (3)  A b o v e   C l o u d   B a s e
+!==================================================================
+      DO k=cldbase,ktop
+! Initialize
+        CALL PUSHREAL4ARRAY(alpha2, fp/4)
+        alpha2 = 0e+0_fp
+! CMFMC_BELOW is the air mass [kg/m2/s] coming into the
+! grid box (K) from the box immediately below (K-1).
+        IF (k .EQ. 1) THEN
+          CALL PUSHREAL4ARRAY(cmfmc_below, fp/4)
+          cmfmc_below = 0e+0_fp
+          CALL PUSHCONTROL1B(0)
+        ELSE
+          CALL PUSHREAL4ARRAY(cmfmc_below, fp/4)
+          cmfmc_below = cmfmc(k-1)
+          CALL PUSHCONTROL1B(1)
+        END IF
+
+! If we have a nonzero air mass flux coming from
+! grid box (K-1) into (K) ...
+      IF (cmfmc_below .GT. tinynum) THEN
+!------------------------------------------------------------
+! (3.1)  M a s s   B a l a n c e   i n   C l o u d
+!------------------------------------------------------------
+! Air mass flowing out of cloud at grid box (K) [kg/m2/s]
+          cmout = cmfmc(k) + dtrain(k)
+! Air mass flowing into cloud at grid box (K) [kg/m2/s]
+          CALL PUSHREAL4ARRAY(entrn, fp/4)
+          entrn = cmout - cmfmc_below
+! Amount of QC preserved against scavenging [kg/kg]
+!QC_PRES = QC * ( 1e+0_fp - F(K,IC) )
+          qc_pres = qc*(1e+0_fp-f(k, na))
+! Amount of QC lost to scavenging [kg/kg]
+! QC_SCAV = 0 for non-soluble species
+!QC_SCAV = QC * F(K,IC)
+          qc_scav = qc*f(k, na)
+               
+! - - - - - - - - FOR SOLUBLE SPECIES ONLY - - - - - - - - - 
+          IF (qc_scav .GT. 0e+0_fp) THEN
+          print *,'Kay: something went wrong, CO2 should not be soluble'  
+! The fraction ALPHA is the fraction of raindrops that
+! will re-evaporate soluble species while falling from
+! grid box K+1 down to grid box K.  Avoid div-by-zero.
+! Initialize
+            IF (pdown(k+1) .GT. tinynum) THEN
+! %%%% CASE 1 %%%%
+! Partial re-evaporation. Less precip is leaving
+! the grid box then entered from above.
+               IF (pdown(k+1) .GT. pdown(k) .AND. pdown(k) .GT. tinynum)  THEN
+
+                alpha = reevapcn(k)*bmass(k)/(pdown(k+1)*10e+0_fp)
+! Restrict ALPHA to be less than 1
+! (>1 is unphysical)  (hma, 24-Dec-2010)
+                IF (alpha .GT. 1e+0_fp) THEN
+                  CALL PUSHCONTROL1B(0)
+                  alpha = 1e+0_fp
+                ELSE
+                  CALL PUSHCONTROL1B(0)
+                END IF
+! We assume that 1/2 of the soluble species w/in
+! the raindrops actually gets resuspended into
+! the atmosphere
+                alpha2 = alpha*0.5e+0_fp
+              ELSE ! IF (pdown(k+1) .GT. pdown(k) .AND. pdown(k) .GT. tinynum)  THEN
+                CALL PUSHCONTROL1B(1)
+              END IF ! IF (pdown(k+1) .GT. pdown(k) .AND. pdown(k) .GT. tinynum)  THEN
+! %%%% CASE 2 %%%%
+! Total re-evaporation. Precip entered from above,
+! but no precip is leaving grid box (ALPHA = 2 so
+! that  ALPHA2 = 1)
+              IF (pdown(k) .LT. tinynum) THEN
+                CALL PUSHCONTROL1B(0)
+                alpha2 = 1e+0_fp
+              ELSE
+                CALL PUSHCONTROL1B(0)
+              END IF
+
+            ELSE
+              CALL PUSHCONTROL1B(1)
+            END IF
+!
+! //NOTE - NEED TO COMPUTE QC_PRES and QC_SCAV (preserved and scanavged QC)                   
+! The resuspension takes 1/2 the amount of the scavenged
+! aerosol (QC_SCAV) and adds that back to QC_PRES
+            qc_pres = qc_pres + alpha2*qc_scav
+! ... then we decrement QC_SCAV accordingly
+            CALL PUSHCONTROL1B(0)
+          ELSE !  IF (pdown(k+1) .GT. tinynum) THEN
+            CALL PUSHCONTROL1B(1)
+          END IF !  IF (pdown(k+1) .GT. tinynum) THEN
+!  END  - - - - - - - - FOR SOLUBLE SPECIES ONLY - - - - - - - - -  
+
+          IF (entrn .GE. 0e+0_fp .AND. cmout .GT. 0e+0_fp) THEN
+            qc = (cmfmc_below*qc_pres+entrn*q(k))/cmout
+            CALL PUSHCONTROL1B(0)
+          ELSE
+            CALL PUSHCONTROL1B(1)
+          END IF
+
+          t1 = cmfmc_below*qc_pres
+          t2 = -(cmfmc(k)*qc)
+          t3 = cmfmc(k)*q(k+1)
+          t4 = -(cmfmc_below*q(k))
+          tsum = t1 + t2 + t3 + t4
+! change in [kg/kg]
+          delq = sdt/bmass(k)*tsum
+! If DELQ > Q then do not make Q negative!!!
+          IF (q(k) + delq .LT. 0) THEN
+            delq = -q(k)
+            CALL PUSHCONTROL1B(0)
+          ELSE
+            CALL PUSHCONTROL1B(1)
+          END IF
+! Increment the species array [kg/kg]
+          q(k) = q(k) + delq
+          CALL PUSHCONTROL2B(0)
+        ELSE !   IF (entrn .GE. 0e+0_fp .AND. cmout .GT. 0e+0_fp) THEN
+!------------------------------------------------------------
+! (3.5)  N o   C l o u d   M a s s   F l u x   B e l o w
+!------------------------------------------------------------
+! If there is no cloud mass flux coming from below, set
+! QC to the species concentration at this level [kg/kg]
+! //SECTION - NO UPDRAFT AT LEVEL K-1             
+          qc = q(k)
+! //!SECTION - NO UPDRAFT AT LEVEL K-1
+! Bug fix for the cloud base layer, which is not necessarily
+! in the boundary layer, and there could be
+! "secondary convection" plumes - one in the PBL and another 
+! one not.  NOTE: T2 and T3 are the same terms as described 
+! in the above section.  (swu, 08/13/2007)
+! //SECTION - UPDRAFT STARTS AT LEVEL K   
+          IF (cmfmc(k) .GT. tinynum) THEN
+! Species convected from K -> K+1
+! [kg/m2/s * kg species/kg dry air]
+            t2 = -(cmfmc(k)*qc)
+! Species subsiding from K+1 -> K [kg/m2/s]
+! [kg/m2/s * kg species/kg dry air]
+            t3 = cmfmc(k)*q(k+1)
+! Change in species concentration [kg/kg]
+            delq = sdt/bmass(k)*(t2+t3)
+! If DELQ > Q then do not make Q negative!!!
+            IF (q(k) + delq .LT. 0.0e+0_fp) THEN
+              delq = -q(k)
+              CALL PUSHCONTROL1B(0)
+            ELSE
+              CALL PUSHCONTROL1B(1)
+            END IF
+
+! Add change in species to Q array [kg/kg]
+            q(k) = q(k) + delq
+            CALL PUSHCONTROL2B(1)
+          ELSE
+            CALL PUSHCONTROL2B(2)
+          END IF
+        
+         END IF
+      
+      END DO
+    
+   END DO
+
+
+
+
+
+!
+! DONE FORWARD SIMULATION WITHIN ADJOINT
+!    
+
+
+
+
+
+
+     IF (PRINT_DBG_KAY) THEN
+     IF(MAPL_AM_I_ROOT()) THEN
+        print *,'Done with forward the forward simulation, will proceede with adjoint'
+        print *,'concentration',q(1:10)
+        print *,'delq:',delq
+        print *,'cldbase,ktop',cldbase,ktop
+     END IF
+     END IF
+!
+! DO ADJOINT CALCULATION    
+!
+
+!  DO na=nc,1,-1
+    DO istep=ns,1,-1
+      qcb = 0.0
+      !
+      ! from cloud top to cloud base
+      !
+      DO k=ktop,cldbase,-1
+        CALL POPCONTROL2B(branch)
+        IF (branch .EQ. 0) THEN
+          delqb = qb0(k)
+          CALL POPCONTROL1B(branch)
+          IF (branch .EQ. 0) THEN
+            qb0(k) = qb0(k) - delqb
+            delqb = 0.0
+          END IF
+          tsumb = sdt*delqb/bmass(k)
+          t1b = tsumb
+          t2b = tsumb
+          t3b = tsumb
+          t4b = tsumb
+          qb0(k) = qb0(k) - cmfmc_below*t4b
+          qb0(k+1) = qb0(k+1) + cmfmc(k)*t3b
+          qcb = qcb - cmfmc(k)*t2b
+          qc_presb = cmfmc_below*t1b
+          CALL POPCONTROL1B(branch)
+          IF (branch .EQ. 0) THEN
+            cmout = cmfmc(k) + dtrain(k)
+            qc_presb = qc_presb + cmfmc_below*qcb/cmout
+            qb0(k) = qb0(k) + entrn*qcb/cmout
+            qcb = 0.0
+          END IF
+          CALL POPCONTROL1B(branch)
+          IF (branch .EQ. 0) THEN
+            qc_scavb = alpha2*qc_presb
+            CALL POPCONTROL1B(branch)
+            IF (branch .EQ. 0) CALL POPCONTROL1B(branch)
+          ELSE
+            qc_scavb = 0.0
+          END IF
+          qcb = qcb + f(k, na)*qc_scavb + (1e+0_fp-f(k, na))*qc_presb
+          CALL POPREAL4ARRAY(entrn, fp/4)
+        ELSE
+          IF (branch .EQ. 1) THEN
+            delqb = qb0(k)
+            CALL POPCONTROL1B(branch)
+            IF (branch .EQ. 0) THEN
+              qb0(k) = qb0(k) - delqb
+              delqb = 0.0
+            END IF
+            tempb = sdt*delqb/bmass(k)
+            t2b = tempb
+            t3b = tempb
+            qb0(k+1) = qb0(k+1) + cmfmc(k)*t3b
+            qcb = qcb - cmfmc(k)*t2b
+          END IF
+          qb0(k) = qb0(k) + qcb
+          qcb = 0.0
+        END IF
+        CALL POPCONTROL1B(branch)
+        IF (branch .EQ. 0) THEN
+          CALL POPREAL4ARRAY(cmfmc_below, fp/4)
+        ELSE
+          CALL POPREAL4ARRAY(cmfmc_below, fp/4)
+        END IF
+        CALL POPREAL4ARRAY(alpha2, fp/4)
+      END DO ! DO k=ktop,cldbase,-1
+      
+      !
+      ! below cloud base
+      !
+      
+      CALL POPCONTROL2B(branch)
+      IF (branch .EQ. 0) THEN
+        qb0(cldbase) = qb0(cldbase) + qcb
+      ELSE IF (branch .EQ. 1) THEN
+        qb0(cldbase) = qb0(cldbase) + qcb
+      ELSE
+        qcb = qcb + SUM(qb0(1:cldbase-1))
+        qb0(1:cldbase-1) = 0.0
+        tempb = qcb/(mb+cmfmc(cldbase-1)*sdt)
+        qbb = mb*tempb
+        qb0(cldbase) = qb0(cldbase) + sdt*cmfmc(cldbase-1)*tempb
+        qb_numb = qbb/delp_dry_num
+        DO k=cldbase-1,1,-1
+          qb0(k) = qb0(k) + delp_dry(k)*qb_numb
+        END DO
+        CALL POPREAL4ARRAY(delp_dry_num, fp/4)
+      END IF
+    
+   END DO
+  !END DO
+  
+
+    IF (PRINT_DBG_KAY) THEN
+    IF (MAPL_AM_I_ROOT()) THEN   
+   print *,'kay, adjoint, ad_count, before pop',ad_count
+    ENDIF
+    ENDIF
+
+  CALL POPINTEGER4(ad_count)
+
+
+
+!  DO i_ind=1,ad_count
+!    IF (i .EQ. 1) CALL POPCONTROL1B(branch)
+!  END DO
+
+
+    IF (PRINT_DBG_KAY) THEN
+IF (MAPL_AM_I_ROOT()) THEN
+ print *,'Completed with adjoint calculation'
+ENDIF
+ENDIF
+
+
+ ! DEALLOCATE(bmass)
+ ! DEALLOCATE(pdown)
+ ! DEALLOCATE(dqrcu)
+ ! DEALLOCATE(reevapcn)
+
+ENDIF
 
     !================================================================
     ! Succesful return!

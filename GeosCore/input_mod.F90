@@ -1967,8 +1967,8 @@ CONTAINS
        WRITE( 6, 100 ) 'Allow hom. NAT nucleation?  : ', Input_Opt%LHOMNUCNAT
        WRITE( 6, 120 ) 'NAT supercooling requirement: ',                     &
                                                    Input_Opt%T_NAT_SUPERCOOL
-       WRITE( 6, 120 ) 'Ice supersaturation req.    : ',                     &
-                                     ((Input_Opt%P_ICE_SUPERSAT-1)*1.e+2_fp)
+!       WRITE( 6, 120 ) 'Ice supersaturation req.    : ',                     &
+!                                     ((Input_Opt%P_ICE_SUPERSAT-1)*1.e+2_fp)
        WRITE( 6, 100 ) 'Perform PSC het. chemistry? : ', Input_Opt%LPSCCHEM
        WRITE( 6, 100 ) 'Use strat. aerosol OD?      : ', Input_Opt%LSTRATOD
     ENDIF
@@ -2437,14 +2437,14 @@ CONTAINS
        WRITE( 6,100 ) ' => Use Linoz for O3?       : ', Input_Opt%LLINOZ
        WRITE( 6,100 ) 'Online strat. H2O?          : ', Input_Opt%LACTIVEH2O
        WRITE( 6,100 ) 'Use robust strat H2O BC?    : ', Input_Opt%LStaticH2OBC
-       WRITE( 6,110 ) 'GAMMA HO2                   : ', Input_Opt%GAMMA_HO2
+   !    WRITE( 6,110 ) 'GAMMA HO2                   : ', Input_Opt%GAMMA_HO2
        WRITE( 6,100 ) 'Use auto-reduce solver?     : ', Input_Opt%USE_AUTOREDUCE
        IF ( Input_Opt%AUTOREDUCE_IS_KEY_THRESHOLD ) THEN
          WRITE( 6,100 ) 'Use target species threshold: ', Input_Opt%AUTOREDUCE_IS_KEY_THRESHOLD
          WRITE( 6,130 ) 'OH tuning factor:             ', Input_Opt%AUTOREDUCE_TUNING_OH
          WRITE( 6,130 ) 'NO2 tuning factor:            ', Input_Opt%AUTOREDUCE_TUNING_NO2
        ELSE
-         WRITE( 6,120 ) 'Absolute AR threshold       : ', Input_Opt%AUTOREDUCE_THRESHOLD
+ !        WRITE( 6,120 ) 'Absolute AR threshold       : ', Input_Opt%AUTOREDUCE_THRESHOLD
          WRITE( 6,100 ) 'Use prs. dependent thres?   : ', Input_Opt%AUTOREDUCE_IS_PRS_THRESHOLD
        ENDIF
        WRITE( 6,100 ) 'Keep halogen spec. active?  : ', Input_Opt%AUTOREDUCE_IS_KEEPACTIVE

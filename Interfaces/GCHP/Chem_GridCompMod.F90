@@ -68,6 +68,7 @@ MODULE Chem_GridCompMod
   USE PHYSCONSTANTS
 #endif
 
+
   IMPLICIT NONE
   PRIVATE
 !
@@ -2556,6 +2557,15 @@ CONTAINS
              IF (Input_opt%IS_ADJOINT) THEN
                 call WRITE_PARALLEL('  Resetting state from checkpoint file')
                 ! call MAPL_GenericRefresh(GC, Import, Export, Clock, RC)
+                
+
+                if ( Input_Opt%amIRoot) THEN    
+                        print *,'Kay, before refresh, species:',State_Chm%SpcData(3)%Info%Name
+                        print *,'Kay before refresh',Int2Spc(3)%Internal(6,5,State_Grid%NZ)
+                        ! print *,'Kay before refresh,1',State_Chm%Species(Int2Spc(3)%ID)%Conc(6,5,1)
+                endif
+                
+
                 call Adjoint_StateRefresh( GC, IMPORT, EXPORT, CLOCK, RC )
                 ! Loop over all species and get info from spc db
                 DO N = 1, State_Chm%nSpecies
@@ -2571,7 +2581,16 @@ CONTAINS
                    if ( MAPL_am_I_Root()) WRITE(*,*)                                &
                         'Initialized species from INTERNAL state: ', TRIM(ThisSpc%Name)
 
-                enddo
+                ENDDO
+
+
+                if ( Input_Opt%amIRoot) THEN
+                        print *,'Kay after refresh',Int2Spc(3)%Internal(6,5,State_Grid%NZ)
+                        print *,'Kay Species_ID',Int2Spc(3)%ID
+                        print *,'Kay after refresh,1',State_Chm%Species(Int2Spc(3)%ID)%Conc(6,5,1)
+                endif
+
+
              ELSE
                 call WRITE_PARALLEL('  Recording state to checkpoint file')
                 call Adjoint_StateRecord( GC, IMPORT, EXPORT, CLOCK, RC )
@@ -2940,6 +2959,12 @@ CONTAINS
                 ENDIF
 #endif
 
+        
+            if ( Input_Opt%amIRoot) THEN
+                        print *,'Kay before chunk run',State_Chm%Species(3)%Conc(6,5,1)
+                endif
+
+
              ! Run the GEOS-Chem column chemistry code for the given phase
              CALL GCHP_Chunk_Run( GC         = GC,         & ! Grid comp ref.
                                   nymd       = nymd,       & ! Current YYYYMMDD
@@ -3069,7 +3094,7 @@ CONTAINS
           State_Chm%SpeciesAdj = State_Chm%SpeciesAdj(:,:,State_Grid%NZ:1:-1,:)
 
           DO I = 1, SIZE(Int2Adj,1)
-             WRITE(*,*) 'Copying adjoint ', Int2Adj(I)%ID, ' to ', I
+          !   WRITE(*,*) 'Copying adjoint ', Int2Adj(I)%ID, ' to ', I
              IF ( Int2Adj(I)%ID <= 0 ) CYCLE
              Int2Adj(I)%Internal = State_Chm%SpeciesAdj(:,:,:,Int2Adj(I)%ID)
           ENDDO
@@ -4073,6 +4098,7 @@ CONTAINS
      FILETYPE = 'pnc4'
      FNAME = 'gcadj_import_checkpoint.' // trim(datestamp) // '.nc4'
 
+
      call MAPL_CheckpointState(IMPORT, CLOCK, &
           FNAME, &
           FILETYPE, STATE, hdr/=0, &
@@ -4142,6 +4168,7 @@ CONTAINS
      HDR = 0
 
      FNAME = 'gcadj_import_checkpoint.' // trim(datestamp) // '.nc4'
+
 
      call MAPL_ESMFStateReadFromFile(IMPORT, CLOCK, &
           FNAME, &

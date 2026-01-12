@@ -434,7 +434,7 @@ MODULE Input_Opt_Mod
      ! GCHP adjoint fields
      !---------------------------------------
      LOGICAL                     :: IS_ADJOINT
-     LOGICAL                     :: IS_FD_SPOT, IS_FD_GLOBAL
+     LOGICAL                     :: IS_FD_SPOT, IS_FD_GLOBAL, IS_FD_LAYER
      INTEGER                     :: FD_STEP
      LOGICAL                     :: IS_FD_SPOT_THIS_PET
      INTEGER                     :: IFD, JFD, NFD, LFD, NFD_ADJ
