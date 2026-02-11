@@ -3,6 +3,7 @@ add_library(GCHP STATIC
     Chem_GridCompMod.F90
     gchp_chunk_mod.F90
     gchp_historyexports_mod.F90
+    Adjoint_Utils_Mod.F90
 )
 target_link_libraries(GCHP
 	PUBLIC GeosCore
