@@ -166,11 +166,6 @@ CONTAINS
     INTEGER                        :: CF_JMIN, CF_JMAX
     INTEGER                        :: CF_LMIN, CF_LMAX
 
-
-     REAL(fp)                    :: MIN_LAT,MIN_LON,MAX_LAT,MAX_LON
-     INTEGER                     :: MIN_L,MAX_L
-
-
     ! Need to get gloabl grid information for some FD spot tests
     TYPE(ESMF_Grid)                :: grid           ! ESMF Grid object
     INTEGER                        :: IL_PET, IU_PET ! Global lon bounds on this PET
@@ -296,9 +291,6 @@ CONTAINS
        input_opt%IS_ADJOINT = .TRUE.
     endif
 
-
-
-    ! what type of perturbation/adjoint inital conditions we are doing
     call ESMF_ConfigGetAttribute(CF, FD_TYPE, &
          Label="FD_TYPE:" , Default='NONE', RC=STATUS)
     _VERIFY(STATUS)
@@ -306,24 +298,34 @@ CONTAINS
     Input_Opt%IS_FD_GLOBAL = TRIM(To_UpperCase(FD_TYPE(1:4))) == 'GLOB'
     Input_Opt%IS_FD_SPOT   = TRIM(To_UpperCase(FD_TYPE(1:4))) == 'SPOT'
     Input_Opt%IS_FD_LAYER  = TRIM(To_UpperCase(FD_TYPE(1:4))) == 'LAYE'
-    Input_Opt%IS_FD_VOLUME  = TRIM(To_UpperCase(FD_TYPE(1:4))) == 'VOLU'
 
     call WRITE_PARALLEL('FD_TYPE IS:'//FD_TYPE)
     IF (Input_Opt%IS_FD_GLOBAL)  call WRITE_PARALLEL('FD_TYPE: GLOB')
     IF (Input_Opt%IS_FD_SPOT)  call WRITE_PARALLEL('FD_TYPE: SPOT')
     IF (Input_Opt%IS_FD_LAYER)  call WRITE_PARALLEL('FD_TYPE: LAYER')
-    IF (Input_Opt%IS_FD_VOLUME)  call WRITE_PARALLEL('FD_TYPE: VOLUME')
 
-  
-    ! get perturbation type (if doing forward simulation)
+
+    ! THAT DOES NOT SEEM TO BE WORKING
+   ! IF (MAPL_Am_I_Root()) THEN
+   !    WRITE(*,1091) TRIM(FD_TYPE), Input_Opt%IS_FD_GLOBAL, Input_Opt%IS_FD_SPOT, Input_Opt%IS_FD_LAYER
+   ! ENDIF
+!1091   FORMAT('FD_TYPE = ', a6, ', FD_GLOB = ', L1, ', FD_SPOT = ', L1, ', FD_LAYER = ', L1)
+
+
+
     call ESMF_ConfigGetAttribute(CF, FD_STEP, &
-         Label="FD_STEP:" , Default=0, RC=STATUS)
+         Label="FD_STEP:" , Default=-1, RC=STATUS)
     _VERIFY(STATUS)
-   Input_Opt%FD_STEP = FD_STEP
- ! call WRITE_PARALLEL('FD_SPEC'//FD_STEP)
 
-    ! figure out which species perturb (forward run)/ or which adjoint to initialize (adjoint)
-    call ESMF_ConfigGetAttribute(CF, FD_SPEC, &
+    IF (Input_Opt%IS_FD_GLOBAL .or. Input_Opt%IS_FD_SPOT)  THEN
+       _ASSERT(FD_STEP /= -1, 'FD_GLOB or FD_SPOT require FD_STEP')
+    ENDIF
+
+
+    if (.not. FD_STEP == -1 .or. input_opt%IS_ADJOINT) THEN
+       Input_Opt%FD_STEP = FD_STEP
+
+       call ESMF_ConfigGetAttribute(CF, FD_SPEC, &
             Label="FD_SPEC:", default="", RC=STATUS)
        _VERIFY(STATUS)
        IF (TRIM(FD_SPEC ) == "") THEN
@@ -331,386 +333,209 @@ CONTAINS
        ELSE
           NFD = Ind_(FD_SPEC)
        ENDIF
-   
-   Input_Opt%NFD = NFD
-  call WRITE_PARALLEL('FD_SPEC'//FD_SPEC)
- ! call WRITE_PARALLEL('NFD'//NFD)
-  
-  _ASSERT( (FD_STEP .eq. 0) .or. (NFD .ne. -1), &
-         'If FD_STEP > 0, you need to specify FD_SPEC' )
 
-   ! 
-   ! Read the definition of the grid (this will depend on the FD_TYPE) 
-   !
+      call WRITE_PARALLEL('FD_SPEC'//FD_SPEC)
 
-!
-! 1. SPOT PERTURBATION
-!
-
-   IF (Input_Opt%IS_FD_SPOT) THEN
        call ESMF_ConfigGetAttribute(CF, IFD, &
             Label="IFD:", default=-1, RC=STATUS)
-     _VERIFY(STATUS)
-      call ESMF_ConfigGetAttribute(CF, JFD, &
+       _VERIFY(STATUS)
+
+       call ESMF_ConfigGetAttribute(CF, JFD, &
             Label="JFD:", default=-1, RC=STATUS)
        _VERIFY(STATUS)
-      call ESMF_ConfigGetAttribute(CF, LFD, &
-            Label="LFD:", default=-1, RC=STATUS)
-       _VERIFY(STATUS)
-         
-      
-       _ASSERT(IFD>0, 'For SPOT you need to specify IFD,JFD,LFD')
-       _ASSERT(JFD>0, 'For SPOT you need to specify IFD,JFD,LFD')
-       _ASSERT(LFD>0, 'For SPOT you need to specify IFD,JFD,LFD')
 
-      ! set the local values on this pet
-            
-          ! Get the upper and lower bounds of on each PET using MAPL
-         CALL MAPL_GridGetInterior( Grid, IL_PET, IU_PET, JL_PET, JU_PET )
+       ! Get the ESMF grid attached to this gridded component
+       CALL ESMF_GridCompGet( GC, grid=Grid, __RC__ )
 
-          IF (IL_PET .le. IFD .and. IFD .le. IU_PET .and. &
-             JL_PET .le. JFD .and. JFD .le. JU_PET) THEN
-             
+       ! Get the upper and lower bounds of on each PET using MAPL
+       CALL MAPL_GridGetInterior( Grid, IL_PET, IU_PET, JL_PET, JU_PET )
+
+       ! See if we specified IFD and JFD in GCHP.rc
+       IF ( IFD > 0 .and. JFD > 0 ) THEN
+
+          if (IL_PET .le. IFD .and. IFD .le. IU_PET .and. &
+               JL_PET .le. JFD .and. JFD .le. JU_PET) THEN
              Input_Opt%IS_FD_SPOT_THIS_PET = .true.
              Input_opt%IFD = IFD - IL_PET + 1
              Input_Opt%JFD = JFD - JL_PET + 1
 
+             ! set these for debug printing
+             DMIN = 0.0
+             IMIN = Input_Opt%IFD
+             JMIN = Input_Opt%JFD
           ENDIF
-       
-         Input_Opt%LFD=LFD 
-       
-    ! TODO - OPTION TO DEFINE FD_LAT,FD_LON IN ADDITION TO IFJ,JFD       
-       
-    ENDIF     
 
+       ELSE
 
-!
-!   2. Global perturbation
-!         
-   
-! NOTHING NEEDS TO BE DONE
+          call ESMF_ConfigGetAttribute(CF, FD_LAT, &
+               Label="FD_LAT:", default=-999.0d0, RC=STATUS)
+          _VERIFY(STATUS)
 
+          call ESMF_ConfigGetAttribute(CF, FD_LON, &
+               Label="FD_LON:", default=-999.0d0, RC=STATUS)
+          _VERIFY(STATUS)
 
+         IF (Input_Opt%IS_FD_SPOT) THEN
+          _ASSERT( FD_LAT .ne. -999.0d0 .and. FD_LON .ne. -999.0d0, 'FD_SPOT requires either IFD and JFD or FD_LAT and FD_LON be set in GCHP.rc')
+         ENDIF
 
-!
-! 3. Layer perturbation
-!
+          dmin = 99999.9
+          imin = -1
+          jmin = -1
+          ! try to find lat lon grid cell closest to 44.65, -63.58 (Halifax, NS)
+          DO I = 1, state_grid%nx
+             DO J = 1, state_grid%ny
+                d = sqrt((state_grid%XMID(I,J) - FD_LON)**2 + &
+                     (state_grid%YMID(I,J) - FD_LAT)**2)
+                if (d < dmin) then
+                   dmin = d
+                   imin = i
+                   jmin = j
+                endif
+             enddo
+          enddo
+          ! this is terrible. We need a better way to figure out if we're really in
+          ! a grid cell, bbut I don't know how to do that. For now we're just hardcoding
+          ! to the value for C24 and hoping for no points near cubed-sphere face
+          ! boundaries
+          if (dmin < 3.2) then
+             ! getting the global grid offset is possible, see Chem_GridCompMod.F90:Extract_
+             Input_Opt%IS_FD_SPOT_THIS_PET = .true.
+             Input_Opt%IFD = IMIN
+             Input_Opt%JFD = JMIN
 
+          end if
+       ENDIF
 
-   IF (Input_Opt%IS_FD_LAYER) THEN
-      call ESMF_ConfigGetAttribute(CF, LFD, &
-            Label="LFD:", default=-1, RC=STATUS)
+       Input_Opt%NFD = NFD
+
+       call ESMF_ConfigGetAttribute(CF, LFD, &
+            Label="LFD:",default=0, RC=STATUS)
        _VERIFY(STATUS)
-        
+       PRINT *, "LFD:",LFD
+       !_ASSERT((Input_Opt%IS_FD_LAYER .and. (LFD .eq. 0)), 'FD_LAYER requires LFD to be set and positive in GCHP.rc')
 
-       _ASSERT(LFD>0, 'For LAYER you need to specify LFD')
-       
-         Input_Opt%LFD=LFD 
-              
-    ENDIF     
+       Input_Opt%LFD = LFD
 
+       ! Read in cost function region
 
-!
-! 4. Volume perturbation
-!
+       call ESMF_ConfigGetAttribute(CF, CF_IMIN, &
+            Label="CF_IMIN:", default=-1, RC=STATUS)
+       _VERIFY(STATUS)
 
- IF (Input_Opt%IS_FD_VOLUME) THEN
+       CF_IMIN = CF_IMIN - IL_PET + 1
 
-   ! ---------------------------------------------------------
-   ! 1. LATITUDE (REAL*8)
-   ! ---------------------------------------------------------
-   
-   ! --- MIN_LAT ---
-   CALL ESMF_ConfigGetAttribute(CF, MIN_LAT, &
-        Label="MIN_LAT:", default=-999.9_fp, RC=STATUS)
-   _VERIFY(STATUS)
-   _ASSERT(MIN_LAT .ne. -999.9d0, 'Missing config: MIN_LAT')
-   Input_Opt%MIN_LAT = MIN_LAT
+       call ESMF_ConfigGetAttribute(CF, CF_IMAX, &
+            Label="CF_IMAX:", default=-1, RC=STATUS)
+       _VERIFY(STATUS)
 
-   ! --- MAX_LAT ---
-   CALL ESMF_ConfigGetAttribute(CF, MAX_LAT, &
-        Label="MAX_LAT:", default=-999.9_fp, RC=STATUS)
-   _VERIFY(STATUS)
-   _ASSERT(MAX_LAT .ne. -999.9d0, 'Missing config: MAX_LAT')
-   Input_Opt%MAX_LAT = MAX_LAT
+       CF_IMAX = CF_IMAX - IL_PET + 1
 
+       call ESMF_ConfigGetAttribute(CF, CF_JMIN, &
+            Label="CF_JMIN:", default=-1, RC=STATUS)
+       _VERIFY(STATUS)
 
-   ! ---------------------------------------------------------
-   ! 2. LONGITUDE (REAL*8)
-   ! ---------------------------------------------------------
+       CF_JMIN = CF_JMIN - JL_PET + 1
 
-   ! --- MIN_LON ---
-   CALL ESMF_ConfigGetAttribute(CF, MIN_LON, &
-        Label="MIN_LON:", default=-9999.9_fp, RC=STATUS)
-   _VERIFY(STATUS)
-   _ASSERT(MIN_LON .ne. -9999.9d0, 'Missing config: MIN_LON')
-   Input_Opt%MIN_LON = MIN_LON
+       call ESMF_ConfigGetAttribute(CF, CF_JMAX, &
+            Label="CF_JMAX:", default=-1, RC=STATUS)
+       _VERIFY(STATUS)
 
-   ! --- MAX_LON ---
-   CALL ESMF_ConfigGetAttribute(CF, MAX_LON, &
-        Label="MAX_LON:", default=-9999.9_fp, RC=STATUS)
-   _VERIFY(STATUS)
-   _ASSERT(MAX_LON .ne. -9999.9d0, 'Missing config: MAX_LON')
-   Input_Opt%MAX_LON = MAX_LON
+       CF_JMAX = CF_JMAX - JL_PET + 1
 
+       call ESMF_ConfigGetAttribute(CF, CF_LMIN, &
+            Label="CF_LMIN:", default=-1, RC=STATUS)
+       _VERIFY(STATUS)
 
-   ! ---------------------------------------------------------
-   ! 3. VERTICAL LEVELS (INTEGER)
-   ! ---------------------------------------------------------
+       call ESMF_ConfigGetAttribute(CF, CF_LMAX, &
+            Label="CF_LMAX:", default=-1, RC=STATUS)
+       _VERIFY(STATUS)
 
-   ! --- MIN_L ---
-   CALL ESMF_ConfigGetAttribute(CF, MIN_L, &
-        Label="MIN_L:", default=-999, RC=STATUS)
-   _VERIFY(STATUS)
-   _ASSERT(MIN_L .ne. -999, 'Missing config: MIN_L')
-   Input_Opt%MIN_L = MIN_L
+       IF (CF_IMIN < 1 .OR. CF_IMIN > State_Grid%NX .OR. &
+            CF_IMAX < 1 .OR. CF_IMAX > State_Grid%NX .OR. &
+            CF_JMIN < 1 .OR. CF_JMIN > State_Grid%NY .OR. &
+            CF_JMAX < 1 .OR. CF_JMAX > State_Grid%NY) THEN
+       WRITE(*,1028) Input_Opt%thisCPU,   &
+            Input_Opt%CF_IMIN, Input_Opt%CF_IMAX, &
+            Input_Opt%CF_JMIN, Input_Opt%CF_JMAX, &
+            Input_Opt%CF_LMIN, Input_Opt%CF_LMAX
+1028   FORMAT('Pre-CF on Pet ', i3, ' I = (', i3, ', ', i3, ') &
+             J = ( ', i3, ', ', i3, ') &
+             L = (', i3, ', ', i3, ')')
 
-   ! --- MAX_L ---
-   CALL ESMF_ConfigGetAttribute(CF, MAX_L, &
-        Label="MAX_L:", default=-999, RC=STATUS)
-   _VERIFY(STATUS)
-   _ASSERT(MAX_L .ne. -999, 'Missing config: MAX_L')
-   Input_Opt%MAX_L = MAX_L
+          CF_IMIN = -1
+          CF_IMAX = -1
+          CF_JMIN = -1
+          CF_JMAX = -1
+          CF_LMIN = -1
+          CF_LMAX = -1
+       ENDIF
 
+       _ASSERT(CF_IMIN * CF_IMAX > 0, 'Please define both max and min for CF_I')
+       _ASSERT(CF_JMIN * CF_JMAX > 0, 'Please define both max and min for CF_J')
+       _ASSERT(CF_LMIN * CF_LMAX > 0, 'Please define both max and min for CF_L')
 
-   ! ---------------------------------------------------------
-   ! 4. SANITY CHECKS (Logical Consistency)
-   ! ---------------------------------------------------------
-   
-   ! Check that MAX is actually greater than MIN
-   _ASSERT(Input_Opt%MAX_LAT .ge. Input_Opt%MIN_LAT, &
-           'Error: MAX_LAT must be >= MIN_LAT')
-           
-   _ASSERT(Input_Opt%MAX_LON .ge. Input_Opt%MIN_LON, &
-           'Error: MAX_LON must be >= MIN_LON')
-           
-   _ASSERT(Input_Opt%MAX_L .ge. Input_Opt%MIN_L, &
-           'Error: MAX_L must be >= MIN_L')
-
-
-   _ASSERT(Input_Opt%MIN_L .ge. 1, 'Error: MIN_L cannot be less than 1')
-
- ENDIF
-
-
-
-
-
-
-!    if (.not. FD_STEP == -1 .or. input_opt%IS_ADJOINT) THEN
-!       Input_Opt%FD_STEP = FD_STEP
-!
-!       call ESMF_ConfigGetAttribute(CF, FD_SPEC, &
-!            Label="FD_SPEC:", default="", RC=STATUS)
-!       _VERIFY(STATUS)
-!       IF (TRIM(FD_SPEC ) == "") THEN
-!          NFD = -1
-!       ELSE
-!          NFD = Ind_(FD_SPEC)
-!       ENDIF
-!
-!      call WRITE_PARALLEL('FD_SPEC'//FD_SPEC)
-!
-!       call ESMF_ConfigGetAttribute(CF, IFD, &
-!            Label="IFD:", default=-1, RC=STATUS)
-!       _VERIFY(STATUS)
-!
-!       call ESMF_ConfigGetAttribute(CF, JFD, &
-!            Label="JFD:", default=-1, RC=STATUS)
-!       _VERIFY(STATUS)
-!
-!       ! Get the ESMF grid attached to this gridded component
-!       CALL ESMF_GridCompGet( GC, grid=Grid, __RC__ )
-!
-!       ! Get the upper and lower bounds of on each PET using MAPL
-!       CALL MAPL_GridGetInterior( Grid, IL_PET, IU_PET, JL_PET, JU_PET )
-!
-!       ! See if we specified IFD and JFD in GCHP.rc
-!       IF ( IFD > 0 .and. JFD > 0 ) THEN
-!
-!          if (IL_PET .le. IFD .and. IFD .le. IU_PET .and. &
-!               JL_PET .le. JFD .and. JFD .le. JU_PET) THEN
-!             Input_Opt%IS_FD_SPOT_THIS_PET = .true.
-!             Input_opt%IFD = IFD - IL_PET + 1
-!             Input_Opt%JFD = JFD - JL_PET + 1
-!
-!             ! set these for debug printing
-!             DMIN = 0.0
-!             IMIN = Input_Opt%IFD
-!             JMIN = Input_Opt%JFD
-!          ENDIF
-!
-!       ELSE
-!
-!          call ESMF_ConfigGetAttribute(CF, FD_LAT, &
-!               Label="FD_LAT:", default=-999.0d0, RC=STATUS)
-!          _VERIFY(STATUS)
-!
-!          call ESMF_ConfigGetAttribute(CF, FD_LON, &
-!               Label="FD_LON:", default=-999.0d0, RC=STATUS)
-!          _VERIFY(STATUS)
-!
-!         IF (Input_Opt%IS_FD_SPOT) THEN
-!          _ASSERT( FD_LAT .ne. -999.0d0 .and. FD_LON .ne. -999.0d0, 'FD_SPOT requires either IFD and JFD or FD_LAT and FD_LON be set in GCHP.rc')
-!         ENDIF
-!
-!          dmin = 99999.9
-!          imin = -1
-!          jmin = -1
-!          ! try to find lat lon grid cell closest to 44.65, -63.58 (Halifax, NS)
-!          DO I = 1, state_grid%nx
-!             DO J = 1, state_grid%ny
-!                d = sqrt((state_grid%XMID(I,J) - FD_LON)**2 + &
-!                     (state_grid%YMID(I,J) - FD_LAT)**2)
-!                if (d < dmin) then
-!                   dmin = d
-!                   imin = i
-!                   jmin = j
-!                endif
-!             enddo
-!          enddo
-!          ! this is terrible. We need a better way to figure out if we're really in
-!          ! a grid cell, bbut I don't know how to do that. For now we're just hardcoding
-!          ! to the value for C24 and hoping for no points near cubed-sphere face
-!          ! boundaries
-!          if (dmin < 3.2) then
-!             ! getting the global grid offset is possible, see Chem_GridCompMod.F90:Extract_
-!             Input_Opt%IS_FD_SPOT_THIS_PET = .true.
-!             Input_Opt%IFD = IMIN
-!             Input_Opt%JFD = JMIN
-!
-!          end if
-!       ENDIF
-!
-!       Input_Opt%NFD = NFD
-!
-!       call ESMF_ConfigGetAttribute(CF, LFD, &
-!            Label="LFD:",default=0, RC=STATUS)
-!       _VERIFY(STATUS)
-!       PRINT *, "LFD:",LFD
-!       !_ASSERT((Input_Opt%IS_FD_LAYER .and. (LFD .eq. 0)), 'FD_LAYER requires LFD to be set and positive in GCHP.rc')
-!
-!       Input_Opt%LFD = LFD
-!
-!       ! Read in cost function region
-!
-!       call ESMF_ConfigGetAttribute(CF, CF_IMIN, &
-!            Label="CF_IMIN:", default=-1, RC=STATUS)
-!       _VERIFY(STATUS)!
-!
-!       CF_IMIN = CF_IMIN - IL_PET + 1
-!
-!       call ESMF_ConfigGetAttribute(CF, CF_IMAX, &
-!            Label="CF_IMAX:", default=-1, RC=STATUS)
-!       _VERIFY(STATUS)
-!
-!       CF_IMAX = CF_IMAX - IL_PET + 1
-!
-!       call ESMF_ConfigGetAttribute(CF, CF_JMIN, &
-!            Label="CF_JMIN:", default=-1, RC=STATUS)
-!       _VERIFY(STATUS)
-!
-!       CF_JMIN = CF_JMIN - JL_PET + 1
-!
- !      call ESMF_ConfigGetAttribute(CF, CF_JMAX, &
- !           Label="CF_JMAX:", default=-1, RC=STATUS)
-!       _VERIFY(STATUS)
-!
-!       CF_JMAX = CF_JMAX - JL_PET + 1
-!
-!       call ESMF_ConfigGetAttribute(CF, CF_LMIN, &
-!            Label="CF_LMIN:", default=-1, RC=STATUS)
-!       _VERIFY(STATUS)
-!
-!       call ESMF_ConfigGetAttribute(CF, CF_LMAX, &
-!            Label="CF_LMAX:", default=-1, RC=STATUS)
-!       _VERIFY(STATUS)
-!
-!       IF (CF_IMIN < 1 .OR. CF_IMIN > State_Grid%NX .OR. &
-!            CF_IMAX < 1 .OR. CF_IMAX > State_Grid%NX .OR. &
-!            CF_JMIN < 1 .OR. CF_JMIN > State_Grid%NY .OR. &
-!            CF_JMAX < 1 .OR. CF_JMAX > State_Grid%NY) THEN
-!       WRITE(*,1028) Input_Opt%thisCPU,   &
-!            Input_Opt%CF_IMIN, Input_Opt%CF_IMAX, &
-!            Input_Opt%CF_JMIN, Input_Opt%CF_JMAX, &
-!            Input_Opt%CF_LMIN, Input_Opt%CF_LMAX
-!1028   FORMAT('Pre-CF on Pet ', i3, ' I = (', i3, ', ', i3, ') &
-!             J = ( ', i3, ', ', i3, ') &
-!             L = (', i3, ', ', i3, ')')
-!
-!          CF_IMIN = -1
-!          CF_IMAX = -1
-!          CF_JMIN = -1
-!          CF_JMAX = -1
-!          CF_LMIN = -1
-!          CF_LMAX = -1
-!       ENDIF
-!
-  !     _ASSERT(CF_IMIN * CF_IMAX > 0, 'Please define both max and min for CF_I')
-  !     _ASSERT(CF_JMIN * CF_JMAX > 0, 'Please define both max and min for CF_J')
-  !     _ASSERT(CF_LMIN * CF_LMAX > 0, 'Please define both max and min for CF_L')
-!
- !      _ASSERT(CF_LMIN * CF_IMIN > 0, 'If CF_I: is defined, please define CF_L')
- !      _ASSERT(CF_JMIN * CF_IMIN > 0, 'If CF_I: is defined, please define CF_J')
+       _ASSERT(CF_LMIN * CF_IMIN > 0, 'If CF_I: is defined, please define CF_L')
+       _ASSERT(CF_JMIN * CF_IMIN > 0, 'If CF_I: is defined, please define CF_J')
 
        ! At this point, they should all be set or all be negative (probably -1)
- !      IF (CF_IMIN > 0) THEN
- !         Input_Opt%CF_IMIN = CF_IMIN
- !         Input_Opt%CF_IMAX = CF_IMAX
- !         Input_Opt%CF_JMIN = CF_JMIN
- !         Input_Opt%CF_JMAX = CF_JMAX
- !         Input_Opt%CF_LMIN = CF_LMIN
- !         Input_Opt%CF_LMAX = CF_LMAX
-!       ELSEIF (Input_Opt%IS_FD_SPOT_THIS_PET) THEN
-!          Input_Opt%CF_IMIN = Input_Opt%IFD
-!          Input_Opt%CF_IMAX = Input_Opt%IFD
-!          Input_Opt%CF_JMIN = Input_Opt%JFD
-!          Input_Opt%CF_JMAX = Input_Opt%JFD
-!          Input_Opt%CF_LMIN = Input_Opt%LFD
-!          Input_Opt%CF_LMAX = Input_Opt%LFD
-!       WRITE(*,1027) Input_Opt%thisCPU,   &
-!            Input_Opt%CF_IMIN, Input_Opt%CF_IMAX, &
-!            Input_Opt%CF_JMIN, Input_Opt%CF_JMAX, &
-!            Input_Opt%CF_LMIN, Input_Opt%CF_LMAX
-!1027   FORMAT('CF on Pet ', i3, ' I = (', i3, ', ', i3, ') &
-!             J = ( ', i3, ', ', i3, ') &
-!             L = (', i3, ', ', i3, ')')
-!
-!       ELSE
-!          Input_Opt%CF_IMIN = -1
-!          Input_Opt%CF_IMAX = -1
-!          Input_Opt%CF_JMIN = -1
-!          Input_Opt%CF_JMAX = -1
-!          Input_Opt%CF_LMIN = -1
-!          Input_Opt%CF_LMAX = -1
-!       ENDIF
-!
-!       IF ( Input_Opt%IS_FD_SPOT_THIS_PET ) THEN
-!          write (*,1011) Input_Opt%thisCPU, dmin, imin, jmin, &
-!               state_grid%YMID(IMIN,JMIN), state_grid%XMID(IMIN,JMIN)
-!
-!#ifdef DEBUG
-!          ! Get the ESMF grid attached to this gridded component
-!          CALL ESMF_GridCompGet( GC, grid=Grid, __RC__ )!
-!
-!          ! Get the upper and lower bounds of on each PET using MAPL
-!          CALL MAPL_GridGetInterior( Grid, IL_PET, IU_PET, JL_PET, JU_PET )
-!          WRITE(*,1013) IL_PET, IU_PET
-!          WRITE(*,1014) JL_PET, JU_PET
-!#endif
-!
-!         ENDIF
-!
-!1011   FORMAT('Found FD_SPOT on PET ', i5, ' ', f7.2, &
-!            ' degrees from cell ', i3, ', ', i3, ' (', f7.2, ', ', f7.2, ')')
-!1012   FORMAT('Did not find FD_SPOT on PET ', i5, ' ', f7.2,&
-!            ' degrees from cell ', i3, ', ', i3, ' (', f7.2, ', ', f7.2, ')')
-!1013   FORMAT('   XminOffset = ', i3, '     XmaxOffset = ', i3)
-!1014   FORMAT('   YminOffset = ', i3, '     YmaxOffset = ', i3)
-!1015   FORMAT('   GlobalXMid(', i3, ', ', i3, ') = (', f7.2, ', ' f7.2, ')')
-!1016   FORMAT('       SPC(', a10, ', FD_SPOT) = ', e22.10)
-!1019   FORMAT('   SPC_ADJ(', a10, ', FD_SPOT) = ', e22.10)
- !   ENDIF
+       IF (CF_IMIN > 0) THEN
+          Input_Opt%CF_IMIN = CF_IMIN
+          Input_Opt%CF_IMAX = CF_IMAX
+          Input_Opt%CF_JMIN = CF_JMIN
+          Input_Opt%CF_JMAX = CF_JMAX
+          Input_Opt%CF_LMIN = CF_LMIN
+          Input_Opt%CF_LMAX = CF_LMAX
+       ELSEIF (Input_Opt%IS_FD_SPOT_THIS_PET) THEN
+          Input_Opt%CF_IMIN = Input_Opt%IFD
+          Input_Opt%CF_IMAX = Input_Opt%IFD
+          Input_Opt%CF_JMIN = Input_Opt%JFD
+          Input_Opt%CF_JMAX = Input_Opt%JFD
+          Input_Opt%CF_LMIN = Input_Opt%LFD
+          Input_Opt%CF_LMAX = Input_Opt%LFD
+       WRITE(*,1027) Input_Opt%thisCPU,   &
+            Input_Opt%CF_IMIN, Input_Opt%CF_IMAX, &
+            Input_Opt%CF_JMIN, Input_Opt%CF_JMAX, &
+            Input_Opt%CF_LMIN, Input_Opt%CF_LMAX
+1027   FORMAT('CF on Pet ', i3, ' I = (', i3, ', ', i3, ') &
+             J = ( ', i3, ', ', i3, ') &
+             L = (', i3, ', ', i3, ')')
+
+       ELSE
+          Input_Opt%CF_IMIN = -1
+          Input_Opt%CF_IMAX = -1
+          Input_Opt%CF_JMIN = -1
+          Input_Opt%CF_JMAX = -1
+          Input_Opt%CF_LMIN = -1
+          Input_Opt%CF_LMAX = -1
+       ENDIF
+
+       IF ( Input_Opt%IS_FD_SPOT_THIS_PET ) THEN
+          write (*,1011) Input_Opt%thisCPU, dmin, imin, jmin, &
+               state_grid%YMID(IMIN,JMIN), state_grid%XMID(IMIN,JMIN)
+
+#ifdef DEBUG
+          ! Get the ESMF grid attached to this gridded component
+          CALL ESMF_GridCompGet( GC, grid=Grid, __RC__ )
+
+          ! Get the upper and lower bounds of on each PET using MAPL
+          CALL MAPL_GridGetInterior( Grid, IL_PET, IU_PET, JL_PET, JU_PET )
+          WRITE(*,1013) IL_PET, IU_PET
+          WRITE(*,1014) JL_PET, JU_PET
+#endif
+
+         ENDIF
+
+1011   FORMAT('Found FD_SPOT on PET ', i5, ' ', f7.2, &
+            ' degrees from cell ', i3, ', ', i3, ' (', f7.2, ', ', f7.2, ')')
+1012   FORMAT('Did not find FD_SPOT on PET ', i5, ' ', f7.2,&
+            ' degrees from cell ', i3, ', ', i3, ' (', f7.2, ', ', f7.2, ')')
+1013   FORMAT('   XminOffset = ', i3, '     XmaxOffset = ', i3)
+1014   FORMAT('   YminOffset = ', i3, '     YmaxOffset = ', i3)
+1015   FORMAT('   GlobalXMid(', i3, ', ', i3, ') = (', f7.2, ', ' f7.2, ')')
+1016   FORMAT('       SPC(', a10, ', FD_SPOT) = ', e22.10)
+1019   FORMAT('   SPC_ADJ(', a10, ', FD_SPOT) = ', e22.10)
+    ENDIF
 #endif
 
     ! Initialize other GEOS-Chem modules
@@ -988,7 +813,7 @@ CONTAINS
     TYPE(State_Snapshot)           :: S_Pre_Conv,S_Pre_Mix,S_End
     LOGICAL                        :: IS_ADJOINT
     ! whether we print adjoint debugs
-    LOGICAL,parameter              :: debug_adjoint = .FALSE.
+    LOGICAL,parameter              :: debug_adjoint = .TRUE.
 #endif
 
     ! For stratospheric adjustment
@@ -1328,7 +1153,7 @@ CONTAINS
   
   ! Setup adjoint state variable if adjoint calculation and perturbation if forward simulation
   IF (first) THEN 
-   CALL Setup_Adjoint_State(State_Chm,Input_Opt,State_Grid)
+   CALL Setup_Adjoint_State(State_Chm,Input_Opt)
   ENDIF 
    
 
@@ -2201,8 +2026,6 @@ ENDIF ! IF (Is_Adjoint ) THEN
        WRITE( 6, 115 ) 'AD',       State_Met%AD(I,J,L),        I, J, L
        WRITE( 6, 115 ) 'PREVSPHU', State_Met%SPHU_PREV(I,J,L), I, J, L
        WRITE( 6, 115 ) 'SPHU',     State_Met%SPHU(I,J,L),      I, J, L
-       WRITE( 6, 115 ) 'DP_DRY_PREV',State_Met%DP_DRY_PREV(I,J,L),I, J, L
-       WRITE( 6, 115 ) 'DELP_DRY',State_Met%DELP_DRY(I,J,L),   I, J, L
        ! 3-D Chem fields
        DO N=1,State_Chm%nSpecies
         ThisSpc=>State_Chm%SpcData(N)%Info
