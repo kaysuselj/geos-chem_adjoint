@@ -696,7 +696,7 @@ CONTAINS
     USE PhysConstants,      ONLY : AIRMW
     USE Diagnostics_Mod,    ONLY :  Set_SpcAdj_Diagnostic
     USE Adjoint_Utils_Mod,  ONLY : Push_State,Pop_State,State_Snapshot, &
-                                   Setup_Adjoint_State
+                                   Setup_Adjoint_State,Integrate_Srf_Adjoint
 #endif
 
 #if defined( RRTMG )
@@ -1835,6 +1835,30 @@ CONTAINS
          State_Grid, State_Met,State_Chm, trim(Iam) // ' adjoint at the end.', RC)
 
 ENDIF ! IF (Is_Adjoint ) THEN
+
+
+! update surface flux adjoint
+
+
+! Compute the surface flux
+! (which means getting emissions & drydep from HEMCO)
+! and store it in State_Chm%Surface_Flux
+     CALL Compute_Sflx_For_Vdiff( Input_Opt,  State_Chm, State_Diag,    &
+                                       State_Grid, State_Met, RC            )
+        _ASSERT(RC==GC_SUCCESS, 'Error calling COMPUTE_SFLX_FOR_VDIFF')
+     DT=HcoState%TS_EMIS
+    CALL Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met,DT) 
+     
+
+
+
+
+
+
+
+
+
+
 #endif
 
 
@@ -2026,12 +2050,20 @@ ENDIF ! IF (Is_Adjoint ) THEN
        WRITE( 6, 115 ) 'AD',       State_Met%AD(I,J,L),        I, J, L
        WRITE( 6, 115 ) 'PREVSPHU', State_Met%SPHU_PREV(I,J,L), I, J, L
        WRITE( 6, 115 ) 'SPHU',     State_Met%SPHU(I,J,L),      I, J, L
-       ! 3-D Chem fields
+      
+       ! 3-D Chem fields & adjoints
        DO N=1,State_Chm%nSpecies
         ThisSpc=>State_Chm%SpcData(N)%Info
         IND=IND_(TRIM(ThisSpc%Name))
          WRITE (6, 115),TRIM(ThisSpc%NAME),State_Chm%Species(IND)%Conc(I,J,L),&
-              I,J,L 
+              I,J,L
+         
+        WRITE (6, 118),'FAdj'//TRIM(ThisSpc%NAME),State_Chm%SurfaceFluxAdj(I,J,IND),&
+              I,J,IND
+
+        WRITE (6, 115),'FAdj'//TRIM(ThisSpc%NAME),State_Chm%SpeciesAdj(I,J,L,IND),&
+              I,J,L
+
        ENDDO
        
        
@@ -2041,6 +2073,7 @@ ENDIF ! IF (Is_Adjoint ) THEN
     ENDIF
 114 FORMAT( 'Grid cell  for ', a8, ' = ', es24.16, ', I,J  = ',2I4 )
 115 FORMAT( 'Grid cell  for ', a8, ' = ', es24.16, ', I,J,L= ',3I4 )
+118 FORMAT( 'Grid cell  for ', a8, ' = ', es24.16, ', I,J,N= ',3I4 )
 120 FORMAT( / )
 
 
