@@ -135,6 +135,10 @@ MODULE State_Diag_Mod
      REAL(f8),           POINTER :: ScaleICsAdj(:,:,:,:)
      TYPE(DgnMap),       POINTER :: Map_ScaleICsAdj
      LOGICAL                     :: Archive_ScaleICsAdj
+     
+     REAL(f8),           POINTER :: SurfaceFluxAdj(:,:,:)
+     TYPE(DgnMap),       POINTER :: Map_SurfaceFluxAdj
+     LOGICAL                     :: Archive_SurfaceFluxAdj 
 #endif
 
      !%%%%% Budget diagnostics %%%%%
@@ -1597,6 +1601,10 @@ CONTAINS
     State_Diag%ScaleICsAdj                         => NULL()
     State_Diag%Map_ScaleICSAdj                     => NULL()
     State_Diag%Archive_ScaleICsAdj                 = .FALSE.
+    
+    State_Diag%SurfaceFluxAdj                      => NULL()
+    State_Diag%Map_SurfaceFluxAdj                  => NULL()
+    State_Diag%Archive_SurfaceFluxAdj              = .FALSE.
 #endif
 
     State_Diag%FracOfTimeInTrop                    => NULL()
@@ -3118,6 +3126,30 @@ CONTAINS
        RETURN
     ENDIF
 
+    !------------------------------------------------------------------------
+    ! Surface Flux Adjoint diagnostic
+    !------------------------------------------------------------------------
+    diagId  = 'SurfaceFluxAdj'
+    CALL Init_and_Register(                                                  &
+         Input_Opt      = Input_Opt,                                         &
+         State_Chm      = State_Chm,                                         &
+         State_Diag     = State_Diag,                                        &
+         State_Grid     = State_Grid,                                        &
+         DiagList       = Diag_List,                                         &
+         TaggedDiagList = TaggedDiag_List,                                   &
+         Ptr2Data       = State_Diag%SurfaceFluxAdj,                         &
+         archiveData    = State_Diag%Archive_SurfaceFluxAdj,                 &
+         mapData        = State_Diag%Map_SurfaceFluxAdj,                     &
+         diagId         = diagId,                                            &
+         diagFlag       = 'S',                                               &
+         RC             = RC                                                )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( diagId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+    
     !------------------------------------------------------------------------
     ! Species adjoint diagnostic
     !------------------------------------------------------------------------
@@ -12588,6 +12620,12 @@ CONTAINS
                    RC       = RC                                            )
     IF ( RC /= GC_SUCCESS ) RETURN
 
+CALL Finalize( diagId   = 'SurfaceFluxAdj',                              &
+                   Ptr2Data = State_Diag%SurfaceFluxAdj,                     &
+                   mapData  = State_Diag%Map_SurfaceFluxAdj,                 &
+                   RC       = RC                                            )
+    IF ( RC /= GC_SUCCESS ) RETURN
+
     CALL Finalize( diagId   = 'ScaleICsAdj',                                 &
                    Ptr2Data = State_Diag%ScaleICsAdj,                        &
                    mapData  = State_Diag%Map_ScaleICsAdj,                    &
@@ -14618,6 +14656,13 @@ CONTAINS
        IF ( isRank    ) Rank  = 3
        IF ( isTagged  ) TagId = 'ALL'
        IF ( isSrcType ) SrcType  = KINDVAL_F8
+    ELSE IF ( TRIM(Name_AllCaps) == 'SURFACEFLUXADJ') THEN   
+       IF ( isDesc    ) Desc  = 'Adjoint sensitivity to surface flux'
+       IF ( isUnits   ) Units = 'kg-1 m2 s' ! Kay ?? Or 'kg-1 m2 s' (inverse flux units)
+       IF ( isRank    ) Rank  = 2      
+       IF ( isTagged  ) TagId = 'ALL'   
+       IF ( isSrcType ) SrcType  = KINDVAL_F8
+       
 #endif
 
     ELSE IF ( TRIM( Name_AllCaps ) == 'CONCBEFORECHEM' ) THEN

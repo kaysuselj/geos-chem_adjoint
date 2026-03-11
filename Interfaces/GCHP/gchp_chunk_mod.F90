@@ -313,8 +313,9 @@ CONTAINS
 
 
 
+    ! If we run forward by default no perturbation of 
     call ESMF_ConfigGetAttribute(CF, FD_STEP, &
-         Label="FD_STEP:" , Default=-1, RC=STATUS)
+         Label="FD_STEP:" , Default=0, RC=STATUS)
     _VERIFY(STATUS)
 
     IF (Input_Opt%IS_FD_GLOBAL .or. Input_Opt%IS_FD_SPOT)  THEN
@@ -1834,8 +1835,6 @@ CONTAINS
      CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
          State_Grid, State_Met,State_Chm, trim(Iam) // ' adjoint at the end.', RC)
 
-ENDIF ! IF (Is_Adjoint ) THEN
-
 
 ! update surface flux adjoint
 
@@ -1850,14 +1849,7 @@ ENDIF ! IF (Is_Adjoint ) THEN
     CALL Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met,DT) 
      
 
-
-
-
-
-
-
-
-
+ENDIF ! IF (Is_Adjoint) THEN
 
 #endif
 

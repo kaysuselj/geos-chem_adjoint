@@ -126,7 +126,7 @@ CONTAINS
     END IF
   
 
-     FD_SPEC = transfer(state_chm%SpcData(Input_Opt%NFD)%Info%Name, FD_SPEC)
+   !  FD_SPEC = transfer(state_chm%SpcData(Input_Opt%NFD)%Info%Name, FD_SPEC)
 
 
     ! ------------------------------------------------------------------
@@ -137,7 +137,7 @@ CONTAINS
           
           
        IF (Is_Adj) THEN    
-           State_Chm%SpeciesAdj(:,:,:,:) = 0d0
+           State_Chm%SpeciesAdj(:,:,:,:) = 0.d0
            State_Chm%SpeciesAdj(IFD,JFD,LFD,NFD)=1.0d0
            IF (Is_Root) & 
            WRITE(*,*) ' Setting Single Forcing to 1 (ifd,jfd,lfd,nfd)',IFD,JFD,LFD,NFD
@@ -157,7 +157,7 @@ CONTAINS
     IF (Input_Opt%IS_FD_GLOBAL) THEN
  
     IF (Is_Adj) THEN    
-           State_Chm%SpeciesAdj(:,:,:,:)   = 0d0
+           State_Chm%SpeciesAdj(:,:,:,:)   = 0.d0
            State_Chm%SpeciesAdj(:,:,:,NFD) = 1.0d0
            IF (Is_Root) WRITE(*,*) ' Setting Global Adjoint Forcing to 1'
        ELSE
@@ -176,7 +176,7 @@ CONTAINS
     IF (Input_Opt%IS_FD_LAYER) THEN
 
         IF (Is_Adj) THEN
-            State_Chm%SpeciesAdj(:,:,:,:)     = 0d0
+            State_Chm%SpeciesAdj(:,:,:,:)     = 0.d0
             State_Chm%SpeciesAdj(:,:,LFD,NFD) = 1.0d0
             IF (Is_Root) WRITE(*,*) ' Setting Layer ', LFD, ' Adjoint Forcing to 1'
         ELSE
@@ -188,12 +188,12 @@ CONTAINS
 
     END IF
 
-!
-!
-!
 
+!
+! Set all adjoint to 0
+!
   IF (Is_Adj) THEN
-        State_Chm%SurfaceFluxAdj(:,:,:)=0d0
+        State_Chm%SurfaceFluxAdj(:,:,:)=0.d0
   END IF        
 
 END SUBROUTINE Setup_Adjoint_State
@@ -243,9 +243,13 @@ SUBROUTINE  Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met,DT)
     rho_dry=>State_Met%AIRDEN(:,:,1)
     dz=>State_Met%BXHEIGHT(:,:,1)
 
-    State_Chm%SurfaceFluxAdj(:,:,NFD)=State_Chm%SurfaceFluxAdj(:,:,NFD)+ &
-        State_Chm%SpeciesAdj(:,:,1,NFD)*(surf_flux*DT/(rho_dry*dz))
+   ! State_Chm%SurfaceFluxAdj(:,:,NFD)=State_Chm%SurfaceFluxAdj(:,:,NFD)+ &
+   !     State_Chm%SpeciesAdj(:,:,1,NFD)*(surf_flux*DT/(rho_dry*dz))
     
+
+   print *,'Kay: dz_min,max',minval(dz),maxval(dz)
+   print *,'Kay: rho_dry',minval(rho_dry),maxval(rho_dry)
+
       CALL Convert_Spc_Units(                                                  &
          Input_Opt      = Input_Opt,                                         &
          State_Chm      = State_Chm,                                         &

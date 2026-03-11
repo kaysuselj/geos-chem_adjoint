@@ -511,6 +511,7 @@ CONTAINS
        DO S = 1, mapData%nSlots
           N = mapData%slot2id(S)
           State_Diag%SpeciesAdj(:,:,:,S) = State_Chm%SpeciesAdj(:,:,:,N)
+          State_Diag%SurfaceFluxAdj(:,:,S) = State_Chm%SurfaceFluxAdj(:,:,N)
        ENDDO
        !$OMP END PARALLEL DO
 
