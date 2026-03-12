@@ -243,12 +243,16 @@ SUBROUTINE  Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met,DT)
     rho_dry=>State_Met%AIRDEN(:,:,1)
     dz=>State_Met%BXHEIGHT(:,:,1)
 
-   ! State_Chm%SurfaceFluxAdj(:,:,NFD)=State_Chm%SurfaceFluxAdj(:,:,NFD)+ &
-   !     State_Chm%SpeciesAdj(:,:,1,NFD)*(surf_flux*DT/(rho_dry*dz))
-    
-
-   print *,'Kay: dz_min,max',minval(dz),maxval(dz)
-   print *,'Kay: rho_dry',minval(rho_dry),maxval(rho_dry)
+    ! Accumulate adjoint of surface flux scaling factor:
+    !
+    ! Forward:  dConc = (SrfFlux_base * scale) * DT / (rho_dry * dz)
+    ! Adjoint:  dJ/d(scale) += SpeciesAdj(:,:,1) * SrfFlux_base * DT / (rho_dry * dz)
+    !
+    ! Units:  SpeciesAdj [J / (kg_spc/kg_dry)] * surf_flux [kg_spc/m2/s]
+    !         * DT [s] / (rho_dry [kg_dry/m3] * dz [m])
+    !         = SpeciesAdj * [kg_spc/kg_dry]  =>  dimensionless (sensitivity to scale factor)
+    State_Chm%SurfaceFluxAdj(:,:,NFD) = State_Chm%SurfaceFluxAdj(:,:,NFD) + &
+         State_Chm%SpeciesAdj(:,:,1,NFD) * ( surf_flux * DT / ( rho_dry * dz ) )
 
       CALL Convert_Spc_Units(                                                  &
          Input_Opt      = Input_Opt,                                         &

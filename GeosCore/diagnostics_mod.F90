@@ -153,7 +153,7 @@ CONTAINS
     !-----------------------------------------------------------------------
     ! Set species concentration diagnostic in units specified in state_diag_mod
     !-----------------------------------------------------------------------
-    IF ( State_Diag%Archive_SpeciesAdj ) THEN
+    IF ( State_Diag%Archive_SpeciesAdj .OR. State_Diag%Archive_SurfaceFluxAdj ) THEN
        CALL Set_SpcAdj_Diagnostic( Input_Opt,  State_Chm, State_Diag,         &
                                    State_Grid, State_Met, RC                 )
 
@@ -502,21 +502,37 @@ CONTAINS
     !=======================================================================
     IF ( Input_Opt%Is_Adjoint ) THEN
 
-       ! Point to mapping obj specific to SpeciesAdj diagnostic collection
-       mapData => State_Diag%Map_SpeciesAdj
+       ! --- SpeciesAdj: 4-D (NX,NY,NZ,nSlots) ---
+       IF ( State_Diag%Archive_SpeciesAdj ) THEN
+          mapData => State_Diag%Map_SpeciesAdj
 
-       !$OMP PARALLEL DO       &
-       !$OMP DEFAULT( SHARED ) &
-       !$OMP PRIVATE( N, S   )
-       DO S = 1, mapData%nSlots
-          N = mapData%slot2id(S)
-          State_Diag%SpeciesAdj(:,:,:,S) = State_Chm%SpeciesAdj(:,:,:,N)
-          State_Diag%SurfaceFluxAdj(:,:,S) = State_Chm%SurfaceFluxAdj(:,:,N)
-       ENDDO
-       !$OMP END PARALLEL DO
+          !$OMP PARALLEL DO       &
+          !$OMP DEFAULT( SHARED ) &
+          !$OMP PRIVATE( N, S   )
+          DO S = 1, mapData%nSlots
+             N = mapData%slot2id(S)
+             State_Diag%SpeciesAdj(:,:,:,S) = State_Chm%SpeciesAdj(:,:,:,N)
+          ENDDO
+          !$OMP END PARALLEL DO
 
-       ! Free pointer
-       mapData => NULL()
+          mapData => NULL()
+       ENDIF
+
+       ! --- SurfaceFluxAdj: 3-D (NX,NY,nSlots) — uses its own map ---
+       IF ( State_Diag%Archive_SurfaceFluxAdj ) THEN
+          mapData => State_Diag%Map_SurfaceFluxAdj
+
+          !$OMP PARALLEL DO       &
+          !$OMP DEFAULT( SHARED ) &
+          !$OMP PRIVATE( N, S   )
+          DO S = 1, mapData%nSlots
+             N = mapData%slot2id(S)
+             State_Diag%SurfaceFluxAdj(:,:,S) = State_Chm%SurfaceFluxAdj(:,:,N)
+          ENDDO
+          !$OMP END PARALLEL DO
+
+          mapData => NULL()
+       ENDIF
 
     ENDIF
 
