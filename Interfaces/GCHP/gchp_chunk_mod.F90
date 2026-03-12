@@ -954,19 +954,7 @@ CONTAINS
        Call Input_Opt%lgr%info('DoChem   : %l1', DoChem)
        Call Input_Opt%lgr%info('DoWetDep : %l1', DoWetDep)
     ENDIF
-
-
-!    if (Input_Opt%amIRoot) then
-!       print *,'Kay CO2 concentration at start of chunk_run,1',State_Chm%Species(3)%Conc(6,5,1)
-!       print *,'Kay print surface pressures:'
-!       print *, 'PSC2_WET', State_Met%PSC2_WET(I_DBG,J_DBG)
-!       print *, 'PSC2_DRY', State_Met%PSC2_DRY(I_DBG,J_DBG)
-!       print *, 'PS1_WET',  State_Met%PS1_WET(I_DBG,J_DBG)
-!       print *, 'PS1_DRY',  State_Met%PS1_DRY(I_DBG,J_DBG)
-!       print *, 'PS2_WET',  State_Met%PS2_WET(I_DBG,J_DBG)
-!       print *, 'PS2_DRY',  State_Met%PS2_DRY(I_DBG,J_DBG)
-!
-!    endif
+  
 
     !-------------------------------------------------------------------------
     ! Pre-Run assignments
@@ -1154,16 +1142,35 @@ CONTAINS
   
   ! Setup adjoint state variable if adjoint calculation and perturbation if forward simulation
   IF (first) THEN 
+    _ASSERT( Input_Opt%NFD >= 1 .AND. Input_Opt%NFD <= State_Chm%nSpecies,     &
+                'Invalid NFD in adjoint setup. Check FD_SPEC in GCHP.rc' )
+    IF ( Input_Opt%IS_FD_LAYER .OR. Input_Opt%IS_FD_SPOT ) THEN
+        _ASSERT( Input_Opt%LFD >= 1 .AND. Input_Opt%LFD <= State_Grid%NZ,       &
+                    'Invalid LFD in adjoint setup. Check LFD in GCHP.rc' )
+    ENDIF
+    IF ( Input_Opt%IS_FD_SPOT_THIS_PET .AND. Input_Opt%IS_FD_SPOT ) THEN
+        _ASSERT( Input_Opt%IFD >= 1 .AND. Input_Opt%IFD <= State_Grid%NX .AND.  &
+                    Input_Opt%JFD >= 1 .AND. Input_Opt%JFD <= State_Grid%NY,        &
+                    'Invalid IFD/JFD on this PET in adjoint setup' )
+    ENDIF
    CALL Setup_Adjoint_State(State_Chm,Input_Opt)
   ENDIF 
    
 
     if (Input_Opt%amIRoot) then
         print *,'Kay, Adjoint variables at the start of gchp_chunk_mod.F90'
-        print *,'adjoint variable',State_Chm%SpeciesAdj(6,5,Input_Opt%LFD,Input_Opt%NFD)
         print *, 'first', first
         print *, 'Input_Opt:IFD,JFD,LFD,NFD',Input_Opt%IFD,Input_Opt%JFD,Input_Opt%LFD,Input_Opt%NFD
         print *, 'StateGrid:NX,NY,NZ',State_Grid%NX,State_Grid%NY,State_Grid%NZ
+        if ( Input_Opt%NFD >= 1 .and. Input_Opt%NFD <= State_Chm%nSpecies .and. &
+             Input_Opt%LFD >= 1 .and. Input_Opt%LFD <= State_Grid%NZ ) then
+           print *,'adjoint variable',                                          &
+                State_Chm%SpeciesAdj( MIN(I_DBG,State_Grid%NX),                 &
+                                      MIN(J_DBG,State_Grid%NY),                 &
+                                      Input_Opt%LFD, Input_Opt%NFD )
+        else
+           print *,'Skipping adjoint value print: invalid LFD/NFD'
+        endif
     endif    
 
 

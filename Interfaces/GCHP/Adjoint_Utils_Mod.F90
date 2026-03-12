@@ -44,6 +44,12 @@ CONTAINS
     TYPE(State_Snapshot), INTENT(OUT) :: Backup
     INTEGER, INTENT(IN)               :: NX,NY,NZ,NFD
 
+     IF ( NFD < 1 .OR. NFD > Current_State%nSpecies ) THEN
+       PRINT *, 'Error in Push_State: invalid NFD = ', NFD,                 &
+             ' valid range is 1..', Current_State%nSpecies
+       STOP
+     ENDIF
+
 
     ! 1. Safety check: Ensure we aren't overwriting an existing backup
     IF ( ALLOCATED(Backup%Conc) ) THEN
@@ -65,6 +71,12 @@ CONTAINS
     TYPE(State_Snapshot), INTENT(INOUT) :: Backup
     TYPE(ChmState),       INTENT(INOUT) :: Target_State
     INTEGER, INTENT(IN)               :: NFD
+
+     IF ( NFD < 1 .OR. NFD > Target_State%nSpecies ) THEN
+       PRINT *, 'Error in Pop_State: invalid NFD = ', NFD,                  &
+             ' valid range is 1..', Target_State%nSpecies
+       STOP
+     ENDIF
 
     ! 1. Restore the values to the State object
     IF ( ALLOCATED(Backup%Conc) ) THEN
@@ -103,6 +115,29 @@ CONTAINS
   
     Scale_Factor = 1.0d0
     Msg          = 'Not perturbing'
+
+     IF ( NFD < 1 .OR. NFD > State_Chm%nSpecies ) THEN
+       WRITE(*,*) 'ERROR in Setup_Adjoint_State: invalid NFD = ', NFD,      &
+              ' valid range is 1..', State_Chm%nSpecies
+       STOP
+     ENDIF
+
+     IF ( ( Input_Opt%IS_FD_SPOT .OR. Input_Opt%IS_FD_LAYER ) .AND.         &
+        ( LFD < 1 .OR. LFD > SIZE(State_Chm%SpeciesAdj,3) ) ) THEN
+       WRITE(*,*) 'ERROR in Setup_Adjoint_State: invalid LFD = ', LFD,      &
+              ' valid range is 1..', SIZE(State_Chm%SpeciesAdj,3)
+       STOP
+     ENDIF
+
+     IF ( Input_Opt%IS_FD_SPOT_THIS_PET .AND. Input_Opt%IS_FD_SPOT ) THEN
+       IF ( IFD < 1 .OR. IFD > SIZE(State_Chm%SpeciesAdj,1) .OR.            &
+          JFD < 1 .OR. JFD > SIZE(State_Chm%SpeciesAdj,2) ) THEN
+         WRITE(*,*) 'ERROR in Setup_Adjoint_State: invalid IFD/JFD on this PET:', &
+                IFD, JFD, ' valid I range 1..', SIZE(State_Chm%SpeciesAdj,1), &
+                ' J range 1..', SIZE(State_Chm%SpeciesAdj,2)
+         STOP
+       ENDIF
+     ENDIF
     
     IF (.NOT. Is_Adj) THEN
         SELECT CASE (Input_Opt%FD_STEP)
@@ -228,31 +263,33 @@ SUBROUTINE  Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met,DT)
          RC             = RC                                                )
  !   _ASSERT(RC==GC_SUCCESS, 'Error calling CONVERT_SPC_UNITS')
 
-    
-    
+
     NFD=Input_Opt%NFD 
-    
-    ! Accumulate gradients for surface flux scaling factors:
-    ! The sensitivity at the previous timestep (n-1) is the sum of:
-    !   1. The forcing from current concentrations (mapped to flux space via F)
-    !   2. The accumulated sensitivity from all future timesteps (n..N)
-    !
-    ! Eq: Adj_SrfFlux = Adj_SrfFlux + (Adj_Conc * Sensitivity_Factor)
-    
+        
     surf_flux=>State_Chm%SurfaceFlux(:,:,NFD)
     rho_dry=>State_Met%AIRDEN(:,:,1)
     dz=>State_Met%BXHEIGHT(:,:,1)
 
-    ! Accumulate adjoint of surface flux scaling factor:
+    ! Instantaneous surface-flux scaling-factor adjoint at current reverse step:
     !
     ! Forward:  dConc = (SrfFlux_base * scale) * DT / (rho_dry * dz)
-    ! Adjoint:  dJ/d(scale) += SpeciesAdj(:,:,1) * SrfFlux_base * DT / (rho_dry * dz)
+    ! Adjoint:  dJ/d(scale) = SpeciesAdj(:,:,1) * SrfFlux_base * DT / (rho_dry * dz)
     !
     ! Units:  SpeciesAdj [J / (kg_spc/kg_dry)] * surf_flux [kg_spc/m2/s]
     !         * DT [s] / (rho_dry [kg_dry/m3] * dz [m])
     !         = SpeciesAdj * [kg_spc/kg_dry]  =>  dimensionless (sensitivity to scale factor)
-    State_Chm%SurfaceFluxAdj(:,:,NFD) = State_Chm%SurfaceFluxAdj(:,:,NFD) + &
-         State_Chm%SpeciesAdj(:,:,1,NFD) * ( surf_flux * DT / ( rho_dry * dz ) )
+    
+        State_Chm%SurfaceFluxAdj(:,:,NFD) =                                     &
+          State_Chm%SpeciesAdj(:,:,1,NFD) * ( surf_flux * DT / ( rho_dry * dz ) )
+
+        IF ( Input_Opt%amIRoot ) THEN
+        WRITE(*,*) 'Integrate_Srf_Adjoint: NFD=', NFD,                        &
+             ' max|surf_flux|=', MAXVAL( ABS( surf_flux ) ),            &
+             ' max|SpeciesAdj(sfc)|=',                                   &
+             MAXVAL( ABS( State_Chm%SpeciesAdj(:,:,1,NFD) ) ),          &
+             ' max|SurfaceFluxAdj|=',                                    &
+             MAXVAL( ABS( State_Chm%SurfaceFluxAdj(:,:,NFD) ) )
+        ENDIF
 
       CALL Convert_Spc_Units(                                                  &
          Input_Opt      = Input_Opt,                                         &
