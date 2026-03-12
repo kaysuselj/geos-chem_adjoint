@@ -434,13 +434,14 @@ MODULE Input_Opt_Mod
      ! GCHP adjoint fields
      !---------------------------------------
      LOGICAL                     :: IS_ADJOINT
-     LOGICAL                     :: IS_FD_SPOT, IS_FD_GLOBAL, IS_FD_LAYER
+     LOGICAL                     :: IS_FD_SPOT, IS_FD_GLOBAL, IS_FD_LAYER, IS_FD_REGIONAL
      INTEGER                     :: FD_STEP
      LOGICAL                     :: IS_FD_SPOT_THIS_PET
      INTEGER                     :: IFD, JFD, NFD, LFD, NFD_ADJ
      INTEGER                     :: CF_IMIN, CF_IMAX
      INTEGER                     :: CF_JMIN, CF_JMAX
      INTEGER                     :: CF_LMIN, CF_LMAX
+     REAL(fp)                    :: IFD_MIN, IFD_MAX, JFD_MIN, JFD_MAX
 #endif
 
      !----------------------------------------
@@ -931,12 +932,18 @@ CONTAINS
     Input_Opt%IS_ADJOINT             = .FALSE.
     Input_Opt%IS_FD_SPOT             = .FALSE.
     Input_Opt%IS_FD_GLOBAL           = .FALSE.
+    Input_Opt%IS_FD_LAYER            = .FALSE.
+    Input_Opt%IS_FD_REGIONAL         = .FALSE.
     Input_Opt%IS_FD_SPOT_THIS_PET    = .FALSE.
     Input_Opt%FD_STEP                = -999
     Input_Opt%IFD                    = -999
     Input_Opt%JFD                    = -999
     Input_Opt%NFD                    = -999
     Input_Opt%LFD                    = -999
+    Input_Opt%IFD_MIN                = -999.0_fp
+    Input_Opt%IFD_MAX                = -999.0_fp
+    Input_Opt%JFD_MIN                = -999.0_fp
+    Input_Opt%JFD_MAX                = -999.0_fp
 #endif
 
     !----------------------------------------

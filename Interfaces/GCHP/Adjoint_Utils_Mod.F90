@@ -93,12 +93,49 @@ CONTAINS
   END SUBROUTINE Pop_State
 
 
-  SUBROUTINE Setup_Adjoint_State(State_Chm,Input_Opt)
+  SUBROUTINE Setup_AdjorPert_State(State_Chm,Input_Opt)
+    !=====================================================================
+    ! PURPOSE: Setup initial adjoint state (forward perturbation or adjoint 
+    !          adjoint sensitivity seed) based on FD_TYPE setting
+    !
+    ! FD_TYPE OPTIONS:
+    ! =====================================================================
+    ! 1. GLOBAL  - Perturb/set adjoint for ALL grid cells
+    !    Required inputs:  FD_SPEC (species name), FD_STEP (perturbation magnitude)
+    !                      NFD will be set from FD_SPEC
+    !    Optional inputs:  None
+    !    Forward mode:     Scale all concentrations in all cells by (1 ± FD_STEP%)
+    !    Adjoint mode:     Set SpeciesAdj = 1 everywhere
+    !
+    ! 2. SPOT    - Perturb/set adjoint for a SINGLE grid cell
+    !    Required inputs:  FD_SPEC, FD_STEP, (IFD, JFD, LFD) OR (FD_LAT, FD_LON, LFD)
+    !                      NFD will be set from FD_SPEC
+    !    Optional inputs:  None
+    !    Forward mode:     Scale concentration at (IFD, JFD, LFD) by (1 ± FD_STEP%)
+    !    Adjoint mode:     Set SpeciesAdj(IFD, JFD, LFD, NFD) = 1, rest = 0
+    !
+    ! 3. LAYER   - Perturb/set adjoint for all cells in ONE vertical layer
+    !    Required inputs:  FD_SPEC, FD_STEP, LFD (layer index, 1-based)
+    !                      NFD will be set from FD_SPEC
+    !    Optional inputs:  None
+    !    Forward mode:     Scale all concentrations at layer LFD by (1 ± FD_STEP%)
+    !    Adjoint mode:     Set SpeciesAdj(:, :, LFD, NFD) = 1, rest = 0
+    !
+    ! 4. REGIONAL - Perturb/set adjoint for a RECTANGULAR geographic region
+    !    Required inputs:  FD_SPEC, FD_STEP, IFD_MIN, IFD_MAX, JFD_MIN, JFD_MAX
+    !                      NFD will be set from FD_SPEC
+    !    Optional inputs:  LFD (if 0 or -999, uses all layers)
+    !    Coordinate range: IFD (longitude) ∈ [-180, 180]
+    !                      JFD (latitude)  ∈ [-90, 90]
+    !    Forward mode:     Scale concentrations where XMID ∈ [IFD_MIN,IFD_MAX]
+    !                      AND YMID ∈ [JFD_MIN,JFD_MAX] by (1 ± FD_STEP%)
+    !    Adjoint mode:     Set SpeciesAdj = 1 for cells within region, 0 outside
+    ! =====================================================================
   
     TYPE(ChmState), INTENT(INOUT) ::  State_Chm
     TYPE(OptInput), INTENT(INOUT) ::  Input_Opt
   
-   ! local vars
+    ! local vars
     INTEGER :: IFD,JFD,LFD,NFD
     INTEGER :: I,J,L
     REAL*8 :: CFN,Scale_Factor
@@ -116,25 +153,30 @@ CONTAINS
     Scale_Factor = 1.0d0
     Msg          = 'Not perturbing'
 
-     IF ( NFD < 1 .OR. NFD > State_Chm%nSpecies ) THEN
+    ! ===== GENERAL VALIDATION =====
+    IF ( NFD < 1 .OR. NFD > State_Chm%nSpecies ) THEN
        WRITE(*,*) 'ERROR in Setup_Adjoint_State: invalid NFD = ', NFD,      &
               ' valid range is 1..', State_Chm%nSpecies
        STOP
-     ENDIF
+    ENDIF
 
+     ! Validation for SPOT and LAYER: LFD must be valid
      IF ( ( Input_Opt%IS_FD_SPOT .OR. Input_Opt%IS_FD_LAYER ) .AND.         &
         ( LFD < 1 .OR. LFD > SIZE(State_Chm%SpeciesAdj,3) ) ) THEN
        WRITE(*,*) 'ERROR in Setup_Adjoint_State: invalid LFD = ', LFD,      &
               ' valid range is 1..', SIZE(State_Chm%SpeciesAdj,3)
+       WRITE(*,*) '   FD_TYPE=SPOT or LAYER requires LFD to be set to a valid layer index'
        STOP
      ENDIF
 
+     ! Validation for SPOT: IFD and JFD must be valid on this PET
      IF ( Input_Opt%IS_FD_SPOT_THIS_PET .AND. Input_Opt%IS_FD_SPOT ) THEN
        IF ( IFD < 1 .OR. IFD > SIZE(State_Chm%SpeciesAdj,1) .OR.            &
           JFD < 1 .OR. JFD > SIZE(State_Chm%SpeciesAdj,2) ) THEN
          WRITE(*,*) 'ERROR in Setup_Adjoint_State: invalid IFD/JFD on this PET:', &
                 IFD, JFD, ' valid I range 1..', SIZE(State_Chm%SpeciesAdj,1), &
                 ' J range 1..', SIZE(State_Chm%SpeciesAdj,2)
+         WRITE(*,*) '   FD_TYPE=SPOT requires IFD, JFD, LFD to be specified in GCHP.rc'
          STOP
        ENDIF
      ENDIF
@@ -167,9 +209,16 @@ CONTAINS
     ! ------------------------------------------------------------------
     ! LOGIC BLOCK: SPOT PERTURBATION
     ! ------------------------------------------------------------------
+    ! Required: IFD, JFD, LFD (set via gchp_chunk_mod config reading)
+    ! Check: Ensure inputs are valid before proceeding
+    ! ------------------------------------------------------------------
   
     IF (Input_Opt%IS_FD_SPOT_THIS_PET .and.  Input_Opt%IS_FD_SPOT) THEN
-          
+       
+       IF (Is_Root) THEN
+          WRITE(*,*) '======== SETUP_ADJOINT_STATE: FD_TYPE=SPOT ========'
+          WRITE(*,*) 'Spot location: IFD=', IFD, ' JFD=', JFD, ' LFD=', LFD
+       ENDIF
           
        IF (Is_Adj) THEN    
            State_Chm%SpeciesAdj(:,:,:,:) = 0.d0
@@ -188,16 +237,28 @@ CONTAINS
   ! ------------------------------------------------------------------
   ! LOGIC BLOCK: GLOBAL PERTURBATION
   ! ------------------------------------------------------------------
+  ! Required: FD_SPEC, FD_STEP
+  ! Check: Ensure FD_SPEC is set (NFD > 0)
+  ! ------------------------------------------------------------------
   
     IF (Input_Opt%IS_FD_GLOBAL) THEN
- 
-    IF (Is_Adj) THEN    
+
+       IF (Is_Root) THEN
+          WRITE(*,*) '======== SETUP_ADJOINT_STATE: FD_TYPE=GLOBAL ========'
+          IF (Is_Adj) THEN
+             WRITE(*,*) 'Adjoint mode: setting all cells to 1'
+          ELSE
+             WRITE(*,*) 'Forward mode: perturbing all cells by ', TRIM(Msg)
+          ENDIF
+       ENDIF
+
+       IF (Is_Adj) THEN    
            State_Chm%SpeciesAdj(:,:,:,:)   = 0.d0
            State_Chm%SpeciesAdj(:,:,:,NFD) = 1.0d0
            IF (Is_Root) WRITE(*,*) ' Setting Global Adjoint Forcing to 1'
        ELSE
        
-       ! Forward: Apply scale factor to a single point
+       ! Forward: Apply scale factor to all cells
           WRITE(*,*) TRIM(Msg)
             State_Chm%Species(NFD)%Conc(:,:,:) = &
                 State_Chm%Species(NFD)%Conc(:,:,:) * Scale_Factor
@@ -207,8 +268,27 @@ CONTAINS
   ! ------------------------------------------------------------------
   ! LOGIC BLOCK: LAYER PERTURBATION
   ! ------------------------------------------------------------------
+  ! Required: FD_SPEC, FD_STEP, LFD (layer index, 1-based)
+  ! Check: Ensure LFD is in valid range [1, nLevels]
+  ! ------------------------------------------------------------------
     
     IF (Input_Opt%IS_FD_LAYER) THEN
+
+       IF (LFD < 1) THEN
+          WRITE(*,*) 'ERROR in Setup_Adjoint_State: FD_TYPE=LAYER requires LFD > 0'
+          WRITE(*,*) '   LFD found: ', LFD
+          STOP
+       ENDIF
+
+       IF (Is_Root) THEN
+          WRITE(*,*) '======== SETUP_ADJOINT_STATE: FD_TYPE=LAYER ========'
+          WRITE(*,*) 'Layer index: LFD=', LFD
+          IF (Is_Adj) THEN
+             WRITE(*,*) 'Adjoint mode: setting layer', LFD, 'to 1'
+          ELSE
+             WRITE(*,*) 'Forward mode: perturbing layer', LFD, 'by ', TRIM(Msg)
+          ENDIF
+       ENDIF
 
         IF (Is_Adj) THEN
             State_Chm%SpeciesAdj(:,:,:,:)     = 0.d0
@@ -223,6 +303,82 @@ CONTAINS
 
     END IF
 
+  ! ------------------------------------------------------------------
+  ! LOGIC BLOCK: REGIONAL PERTURBATION
+  ! ------------------------------------------------------------------
+  ! Required: FD_SPEC, FD_STEP, IFD_MIN, IFD_MAX, JFD_MIN, JFD_MAX
+  ! Optional: LFD (if 0 or -999, perturbation applies to all layers)
+  ! Check:    All four bounds must be valid and within [-180,180] and [-90,90]
+  ! ------------------------------------------------------------------
+
+    IF (Input_Opt%IS_FD_REGIONAL) THEN
+
+       IF (Input_Opt%IFD_MIN == -999.0_fp .OR. Input_Opt%IFD_MAX == -999.0_fp .OR. &
+           Input_Opt%JFD_MIN == -999.0_fp .OR. Input_Opt%JFD_MAX == -999.0_fp) THEN
+          WRITE(*,*) 'ERROR in Setup_Adjoint_State: FD_TYPE=REGIONAL requires all bounds'
+          WRITE(*,*) '   IFD_MIN=', Input_Opt%IFD_MIN, ' IFD_MAX=', Input_Opt%IFD_MAX
+          WRITE(*,*) '   JFD_MIN=', Input_Opt%JFD_MIN, ' JFD_MAX=', Input_Opt%JFD_MAX
+          STOP
+       ENDIF
+
+       IF (Is_Root) THEN
+          WRITE(*,*) '======== SETUP_ADJOINT_STATE: FD_TYPE=REGIONAL ========'
+          WRITE(*,*) 'Region bounds: LON [', Input_Opt%IFD_MIN, ',', Input_Opt%IFD_MAX, ']'
+          WRITE(*,*) '               LAT [', Input_Opt%JFD_MIN, ',', Input_Opt%JFD_MAX, ']'
+          IF (Is_Adj) THEN
+             WRITE(*,*) 'Adjoint mode: setting region to 1'
+          ELSE
+             WRITE(*,*) 'Forward mode: perturbing region by ', TRIM(Msg)
+          ENDIF
+       ENDIF
+
+        IF (Is_Adj) THEN
+            ! Adjoint: Set SpeciesAdj to 1 for all cells within the specified region
+            State_Chm%SpeciesAdj(:,:,:,:) = 0.d0
+            
+            ! Loop over all grid cells and set adjoint to 1 if within region bounds
+            DO L = 1, SIZE(State_Chm%SpeciesAdj,3)
+               DO J = 1, SIZE(State_Chm%SpeciesAdj,2)
+                  DO I = 1, SIZE(State_Chm%SpeciesAdj,1)
+                     ! Check if grid cell (I,J) is within regional bounds
+                     ! NOTE: Exact bounds checking depends on your coordinate system
+                     ! This assumes a simple rectangular region in lat/lon space
+                     IF (STATE_CHM%XMID(I,J) >= Input_Opt%IFD_MIN .AND. &
+                         STATE_CHM%XMID(I,J) <= Input_Opt%IFD_MAX .AND. &
+                         STATE_CHM%YMID(I,J) >= Input_Opt%JFD_MIN .AND. &
+                         STATE_CHM%YMID(I,J) <= Input_Opt%JFD_MAX) THEN
+                        State_Chm%SpeciesAdj(I,J,L,NFD) = 1.0d0
+                     ENDIF
+                  ENDDO
+               ENDDO
+            ENDDO
+            
+            IF (Is_Root) THEN
+               WRITE(*,*) ' Setting REGIONAL Adjoint Forcing to 1'
+               WRITE(*,*) '   Region: LON=[', Input_Opt%IFD_MIN, ',', Input_Opt%IFD_MAX, ']'
+               WRITE(*,*) '           LAT=[', Input_Opt%JFD_MIN, ',', Input_Opt%JFD_MAX, ']'
+            ENDIF
+        ELSE
+            ! Forward: Apply Scale Factor to all grid cells within the region
+            CALL WRITE_PARALLEL(TRIM(Msg)//' REGIONAL')
+            DO L = 1, SIZE(State_Chm%Species(NFD)%Conc,3)
+               DO J = 1, SIZE(State_Chm%Species(NFD)%Conc,2)
+                  DO I = 1, SIZE(State_Chm%Species(NFD)%Conc,1)
+                     ! Check if grid cell (I,J) is within regional bounds
+                     IF (STATE_CHM%XMID(I,J) >= Input_Opt%IFD_MIN .AND. &
+                         STATE_CHM%XMID(I,J) <= Input_Opt%IFD_MAX .AND. &
+                         STATE_CHM%YMID(I,J) >= Input_Opt%JFD_MIN .AND. &
+                         STATE_CHM%YMID(I,J) <= Input_Opt%JFD_MAX) THEN
+                        State_Chm%Species(NFD)%Conc(I,J,L) = &
+                             State_Chm%Species(NFD)%Conc(I,J,L) * Scale_Factor
+                     ENDIF
+                  ENDDO
+               ENDDO
+            ENDDO
+        ENDIF
+
+    END IF
+
 
 !
 ! Set all adjoint to 0
@@ -231,18 +387,18 @@ CONTAINS
         State_Chm%SurfaceFluxAdj(:,:,:)=0.d0
   END IF        
 
-END SUBROUTINE Setup_Adjoint_State
+END SUBROUTINE Setup_AdjorPert_State
   
   
   
-SUBROUTINE  Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met,DT) 
+SUBROUTINE  Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met) 
    USE UnitConv_Mod
    
     TYPE(OptInput),      INTENT(IN) :: Input_Opt      ! Input Options object
     TYPE(ChmState),      INTENT(INOUT) :: State_Chm      ! Chem State object
     TYPE(GrdState),      INTENT(INOUT) :: State_Grid     ! Grid State object
     TYPE(MetState),      INTENT(INOUT) :: State_Met      ! Met State object
-    REAL*8       :: DT
+
 
 ! INTERNALS
     INTEGER                        :: previous_units
@@ -288,15 +444,15 @@ SUBROUTINE  Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met,DT)
 
     ! Instantaneous surface-flux scaling-factor adjoint at current reverse step:
     !
-    ! Forward:  dConc = (SrfFlux_base * scale) * DT / (rho_dry * dz)
-    ! Adjoint:  dJ/d(scale) = SpeciesAdj(:,:,1) * SrfFlux_base * DT / (rho_dry * dz)
+    ! Forward:  dConc = (SrfFlux_base * scale)  / (rho_dry * dz)
+    ! Adjoint:  dJ/d(scale) = SpeciesAdj(:,:,1) * SrfFlux_base / (rho_dry * dz)
     !
     ! Units:  SpeciesAdj [J / (kg_spc/kg_dry)] * surf_flux [kg_spc/m2/s]
-    !         * DT [s] / (rho_dry [kg_dry/m3] * dz [m])
+    !          / (rho_dry [kg_dry/m3] * dz [m])
     !         = SpeciesAdj * [kg_spc/kg_dry]  =>  dimensionless (sensitivity to scale factor)
     
         State_Chm%SurfaceFluxAdj(:,:,NFD) =                                     &
-          State_Chm%SpeciesAdj(:,:,1,NFD) * ( surf_flux * DT / ( rho_dry * dz ) )
+          State_Chm%SpeciesAdj(:,:,1,NFD) * ( surf_flux / ( rho_dry * dz ) )
 
         IF ( Input_Opt%amIRoot ) THEN
            WRITE(*,*) 'Integrate_Srf_Adjoint: NFD=', NFD, ' NA=', NA,             &

@@ -295,22 +295,16 @@ CONTAINS
          Label="FD_TYPE:" , Default='NONE', RC=STATUS)
     _VERIFY(STATUS)
 
-    Input_Opt%IS_FD_GLOBAL = TRIM(To_UpperCase(FD_TYPE(1:4))) == 'GLOB'
-    Input_Opt%IS_FD_SPOT   = TRIM(To_UpperCase(FD_TYPE(1:4))) == 'SPOT'
-    Input_Opt%IS_FD_LAYER  = TRIM(To_UpperCase(FD_TYPE(1:4))) == 'LAYE'
+    Input_Opt%IS_FD_GLOBAL   = TRIM(To_UpperCase(FD_TYPE(1:4))) == 'GLOB'
+    Input_Opt%IS_FD_SPOT     = TRIM(To_UpperCase(FD_TYPE(1:4))) == 'SPOT'
+    Input_Opt%IS_FD_LAYER    = TRIM(To_UpperCase(FD_TYPE(1:4))) == 'LAYE'
+    Input_Opt%IS_FD_REGIONAL = TRIM(To_UpperCase(FD_TYPE(1:4))) == 'REGI'
 
     call WRITE_PARALLEL('FD_TYPE IS:'//FD_TYPE)
-    IF (Input_Opt%IS_FD_GLOBAL)  call WRITE_PARALLEL('FD_TYPE: GLOB')
-    IF (Input_Opt%IS_FD_SPOT)  call WRITE_PARALLEL('FD_TYPE: SPOT')
-    IF (Input_Opt%IS_FD_LAYER)  call WRITE_PARALLEL('FD_TYPE: LAYER')
-
-
-    ! THAT DOES NOT SEEM TO BE WORKING
-   ! IF (MAPL_Am_I_Root()) THEN
-   !    WRITE(*,1091) TRIM(FD_TYPE), Input_Opt%IS_FD_GLOBAL, Input_Opt%IS_FD_SPOT, Input_Opt%IS_FD_LAYER
-   ! ENDIF
-!1091   FORMAT('FD_TYPE = ', a6, ', FD_GLOB = ', L1, ', FD_SPOT = ', L1, ', FD_LAYER = ', L1)
-
+    IF (Input_Opt%IS_FD_GLOBAL)   call WRITE_PARALLEL('FD_TYPE: GLOB')
+    IF (Input_Opt%IS_FD_SPOT)     call WRITE_PARALLEL('FD_TYPE: SPOT')
+    IF (Input_Opt%IS_FD_LAYER)    call WRITE_PARALLEL('FD_TYPE: LAYER')
+    IF (Input_Opt%IS_FD_REGIONAL) call WRITE_PARALLEL('FD_TYPE: REGIONAL')
 
 
     ! If we run forward by default no perturbation of 
@@ -417,6 +411,48 @@ CONTAINS
        !_ASSERT((Input_Opt%IS_FD_LAYER .and. (LFD .eq. 0)), 'FD_LAYER requires LFD to be set and positive in GCHP.rc')
 
        Input_Opt%LFD = LFD
+
+       ! Read REGIONAL adjoint parameters if FD_TYPE='REGIONAL'
+       IF (Input_Opt%IS_FD_REGIONAL) THEN
+          call ESMF_ConfigGetAttribute(CF, Input_Opt%IFD_MIN, &
+               Label="IFD_MIN:", default=-999.0_fp, RC=STATUS)
+          _VERIFY(STATUS)
+          call ESMF_ConfigGetAttribute(CF, Input_Opt%IFD_MAX, &
+               Label="IFD_MAX:", default=-999.0_fp, RC=STATUS)
+          _VERIFY(STATUS)
+          call ESMF_ConfigGetAttribute(CF, Input_Opt%JFD_MIN, &
+               Label="JFD_MIN:", default=-999.0_fp, RC=STATUS)
+          _VERIFY(STATUS)
+          call ESMF_ConfigGetAttribute(CF, Input_Opt%JFD_MAX, &
+               Label="JFD_MAX:", default=-999.0_fp, RC=STATUS)
+          _VERIFY(STATUS)
+
+          ! Validate REGIONAL parameters
+          _ASSERT(Input_Opt%IFD_MIN /= -999.0_fp .and. Input_Opt%IFD_MAX /= -999.0_fp, &
+               'FD_TYPE=REGIONAL requires IFD_MIN and IFD_MAX in GCHP.rc')
+          _ASSERT(Input_Opt%JFD_MIN /= -999.0_fp .and. Input_Opt%JFD_MAX /= -999.0_fp, &
+               'FD_TYPE=REGIONAL requires JFD_MIN and JFD_MAX in GCHP.rc')
+
+          ! Validate longitude ranges: -180 to 180
+          _ASSERT(Input_Opt%IFD_MIN >= -180.0_fp .and. Input_Opt%IFD_MIN <= 180.0_fp, &
+               'IFD_MIN must be between -180 and 180')
+          _ASSERT(Input_Opt%IFD_MAX >= -180.0_fp .and. Input_Opt%IFD_MAX <= 180.0_fp, &
+               'IFD_MAX must be between -180 and 180')
+          _ASSERT(Input_Opt%IFD_MIN <= Input_Opt%IFD_MAX, &
+               'IFD_MIN must be <= IFD_MAX')
+
+          ! Validate latitude ranges: -90 to 90
+          _ASSERT(Input_Opt%JFD_MIN >= -90.0_fp .and. Input_Opt%JFD_MIN <= 90.0_fp, &
+               'JFD_MIN must be between -90 and 90')
+          _ASSERT(Input_Opt%JFD_MAX >= -90.0_fp .and. Input_Opt%JFD_MAX <= 90.0_fp, &
+               'JFD_MAX must be between -90 and 90')
+          _ASSERT(Input_Opt%JFD_MIN <= Input_Opt%JFD_MAX, &
+               'JFD_MIN must be <= JFD_MAX')
+
+          call WRITE_PARALLEL('FD_TYPE=REGIONAL: Setting adjoint for region')
+          WRITE(*,*) 'REGIONAL bounds: LON(IFD)=[', Input_Opt%IFD_MIN, ',', Input_Opt%IFD_MAX, ']'
+          WRITE(*,*) '                 LAT(JFD)=[', Input_Opt%JFD_MIN, ',', Input_Opt%JFD_MAX, ']'
+       ENDIF
 
        ! Read in cost function region
 
@@ -697,7 +733,7 @@ CONTAINS
     USE PhysConstants,      ONLY : AIRMW
     USE Diagnostics_Mod,    ONLY :  Set_SpcAdj_Diagnostic
     USE Adjoint_Utils_Mod,  ONLY : Push_State,Pop_State,State_Snapshot, &
-                                   Setup_Adjoint_State,Integrate_Srf_Adjoint
+                                   Setup_AdjorPert_State,Integrate_Srf_Adjoint
 #endif
 
 #if defined( RRTMG )
@@ -1006,24 +1042,6 @@ CONTAINS
     CALL SET_FLOATING_PRESSURES( State_Grid, State_Met, RC )
     IF ( RC /= GC_SUCCESS ) RETURN
 
-   ! if (Input_Opt%amIRoot) then
-   !    print *,'Kay CO2 concentration at start of chunk_run,2',State_Chm%Species(3)%Conc(6,5,1)
-   !    print *,'Date/time',nymd,nhms,year,month,day,hour,minute 
-   !   endif
-   
-!
-! Kay - print global concentrations before AirQnt
-!
-
-!#ifdef ADJOINT
-!
-!    CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
-!         State_Grid, State_Met,State_Chm, trim(Iam) // ' before airqn unit conversion.', RC)
-!
-!#endif
-
-
-
     ! Define airmass and related quantities
 #if defined( MODEL_GEOS )
     CALL AirQnt( Input_Opt, State_Chm, State_Grid, State_Met, RC, .FALSE. )
@@ -1045,18 +1063,10 @@ CONTAINS
     ENDIF
 #endif
 
-!    if (Input_Opt%amIRoot) then
-!       print *,'Kay CO2 concentration at start of chunk_run,3',State_Chm%Species(3)%Conc(6,5,1)
-!       endif
-
     ! Initialize/reset wetdep after air quantities computed
     IF ( DoConv .OR. DoChem .OR. DoWetDep ) THEN
        CALL SETUP_WETSCAV( Input_Opt, State_Chm, State_Grid, State_Met, RC )
     ENDIF
-
-!    if (Input_Opt%amIRoot) then
-!       print *,'Kay CO2 concentration at start of chunk_run,4',State_Chm%Species(3)%Conc(6,5,1)
-!       endif
 
     ! Cap the polar tropopause pressures at 200 hPa, in order to avoid
     ! tropospheric chemistry from happening too high up (cf. J. Logan)
@@ -1064,11 +1074,6 @@ CONTAINS
                                   State_Grid     = State_Grid, &
                                   State_Met      = State_Met,  &
                                   RC             = RC         )
-
-
-!    if (Input_Opt%amIRoot) then
-!       print *,'Kay CO2 concentration at start of chunk_run,5',State_Chm%Species(3)%Conc(6,5,1)
-!       endif
 
     ! Update clock tracer if relevant
     IF (  IND_('CLOCK','A') > 0 ) THEN
@@ -1078,10 +1083,6 @@ CONTAINS
     ! Call PBL quantities. Those are always needed
     CALL Compute_Pbl_Height( Input_Opt, State_Grid, State_Met, RC )
     _ASSERT(RC==GC_SUCCESS, 'Error calling COMPUTE_PBL_HEIGHT')
-
-!    if (Input_Opt%amIRoot) then
-!       print *,'Kay CO2 concentration before unit conversion',State_Chm%Species(3)%Conc(6,5,1)
-!       endif
 
     ! Convert to dry mixing ratio
     CALL Convert_Spc_Units(                                                  &
@@ -1093,10 +1094,6 @@ CONTAINS
          previous_units = previous_units,                                    &
          RC             = RC                                                )
     _ASSERT(RC==GC_SUCCESS, 'Error calling CONVERT_SPC_UNITS')
-
-!  if (Input_Opt%amIRoot) then
-!  print *,'Kay CO2 concentration after unit conversion',State_Chm%Species(3)%Conc(6,5,1)
-!  endif
 
     !=======================================================================
     ! Always prescribe H2O in both the stratosphere and troposhere in GEOS.
@@ -1139,21 +1136,12 @@ CONTAINS
     CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
          State_Grid, State_Met,State_Chm, trim(Iam) // ' before first unit conversion.', RC)
    
-  
+  !
   ! Setup adjoint state variable if adjoint calculation and perturbation if forward simulation
-  IF (first) THEN 
-    _ASSERT( Input_Opt%NFD >= 1 .AND. Input_Opt%NFD <= State_Chm%nSpecies,     &
-                'Invalid NFD in adjoint setup. Check FD_SPEC in GCHP.rc' )
-    IF ( Input_Opt%IS_FD_LAYER .OR. Input_Opt%IS_FD_SPOT ) THEN
-        _ASSERT( Input_Opt%LFD >= 1 .AND. Input_Opt%LFD <= State_Grid%NZ,       &
-                    'Invalid LFD in adjoint setup. Check LFD in GCHP.rc' )
-    ENDIF
-    IF ( Input_Opt%IS_FD_SPOT_THIS_PET .AND. Input_Opt%IS_FD_SPOT ) THEN
-        _ASSERT( Input_Opt%IFD >= 1 .AND. Input_Opt%IFD <= State_Grid%NX .AND.  &
-                    Input_Opt%JFD >= 1 .AND. Input_Opt%JFD <= State_Grid%NY,        &
-                    'Invalid IFD/JFD on this PET in adjoint setup' )
-    ENDIF
-   CALL Setup_Adjoint_State(State_Chm,Input_Opt)
+  !  --- see possible options in Adjoint_Utils_Mod.F90:Setup_AdjPert_State ---
+  !
+  IF (first) &  CALL Setup_AdjorPert_State(State_Chm,Input_Opt)
+  
   ENDIF 
    
 
