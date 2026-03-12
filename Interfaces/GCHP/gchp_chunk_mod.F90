@@ -1772,31 +1772,9 @@ CONTAINS
        if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' ---  Adjoint turbulence done!'
    
 
-!       if (Input_Opt%amIRoot) then
-!        print *,'Kay, Adjoint variables after turbulence'
-!        print *,'adjoint variable',State_Chm%SpeciesAdj(6,5,Input_Opt%LFD,Input_Opt%NFD)
-!        print *, 'first', first
-!    endif
-
-
    ENDIF
      
      
-    ! Set tropospheric CH4 concentrations and fill species array with
-    ! current values.
-!#if defined( MODEL_GEOS )
-!    IF ( DoTurb .OR. DoTend ) THEN
-!#else
-!    IF ( Phase /= 2 .AND. Input_Opt%ITS_A_FULLCHEM_SIM  &
-!         .AND. IND_('CH4','A') > 0 ) THEN
-!#endif
-!       CALL SET_CH4 ( Input_Opt, State_Chm, State_Diag, &
-!                      State_Grid, State_Met, RC )
-!       _ASSERT(RC==GC_SUCCESS, 'Error calling SET_CH4')
-!    ENDIF
-
-
-
     !
     ! 2. CONVECTION
     !
@@ -1822,12 +1800,6 @@ CONTAINS
        if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Adjoint convection done!'
  
 
-!      if (Input_Opt%amIRoot) then
-!        print *,'Kay, Adjoint variables after convection'
-!        print *,'adjoint variable',State_Chm%SpeciesAdj(6,5,Input_Opt%LFD,Input_Opt%NFD)
-!        print *, 'first', first
-!    endif
-
     ENDIF
 
 
@@ -1849,9 +1821,13 @@ CONTAINS
 ! Compute the surface flux
 ! (which means getting emissions & drydep from HEMCO)
 ! and store it in State_Chm%Surface_Flux
+    if (Input_Opt%amIRoot) write(*,*) 'HEMCO EMISSIONS=', Input_Opt%DoEmissions, ' TS_EMIS[s]=', HcoState%TS_EMIS
      CALL Compute_Sflx_For_Vdiff( Input_Opt,  State_Chm, State_Diag,    &
                                        State_Grid, State_Met, RC            )
         _ASSERT(RC==GC_SUCCESS, 'Error calling COMPUTE_SFLX_FOR_VDIFF')
+    if (Input_Opt%amIRoot) write(*,*) 'HEMCO SFLX max|all|=',               &
+         MAXVAL( ABS( State_Chm%SurfaceFlux(:,:,:) ) ),                     &
+         ' sum(all)=', SUM( State_Chm%SurfaceFlux(:,:,:) )
      DT=HcoState%TS_EMIS
     CALL Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met,DT) 
      

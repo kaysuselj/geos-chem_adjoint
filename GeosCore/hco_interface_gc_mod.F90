@@ -4939,13 +4939,14 @@ CONTAINS
     ENDDO
     !$OMP END PARALLEL DO
 
-    !### Uncomment for debug output
-    !WRITE( 6, '(a)' ) 'eflx and dflx values HEMCO [kg/m2/s]'
-    !DO NA = 1, State_Chm%nAdvect
-    !   WRITE(6,*) 'eflx TRACER ', NA, ': ', SUM(eflx(:,:,NA))
-    !   WRITE(6,*) 'dflx TRACER ', NA, ': ', SUM(dflx(:,:,NA))
-    !   WRITE(6,*) 'sflx TRACER ', NA, ': ', SUM(State_Chm%SurfaceFlux(:,:,NA))
-    !ENDDO
+   ! Debug: print direct HEMCO emissions (EFLX) and deposition (DFLX)
+   ! before any adjoint post-processing.
+   IF ( Input_Opt%amIRoot ) THEN
+      WRITE(6,*) 'HEMCO direct EFLX sum(all)=', SUM(eflx(:,:,:)),          &
+              ' max|EFLX|=', MAXVAL( ABS( eflx(:,:,:) ) )
+      WRITE(6,*) 'HEMCO direct DFLX sum(all)=', SUM(dflx(:,:,:)),          &
+              ' max|DFLX|=', MAXVAL( ABS( dflx(:,:,:) ) )
+   ENDIF
 
     !=======================================================================
     ! DIAGNOSTICS: Compute drydep flux loss due to mixing [molec/cm2/s]
