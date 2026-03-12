@@ -1138,11 +1138,10 @@ CONTAINS
    
   !
   ! Setup adjoint state variable if adjoint calculation and perturbation if forward simulation
-  !  --- see possible options in Adjoint_Utils_Mod.F90:Setup_AdjPert_State ---
+   !  --- see possible options in Adjoint_Utils_Mod.F90:Setup_Adjoint_ForwardPert ---
   !
    IF (first) &  CALL Setup_Adjoint_ForwardPert(State_Chm,State_Grid,Input_Opt)
-  
-  ENDIF 
+
    
 
     if (Input_Opt%amIRoot) then
@@ -1829,8 +1828,7 @@ CALL Compute_Sflx_For_Vdiff( Input_Opt,  State_Chm, State_Diag,    &
          State_Grid, State_Met,State_Chm, trim(Iam) // ' adjoint at the end.', RC)
 
 ! update surface flux adjoint
-  DT=Input_Opt%TS_DYN 
-  CALL Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met,DT) 
+   CALL Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met)
      
 
 ENDIF ! IF (Is_Adjoint) THEN
