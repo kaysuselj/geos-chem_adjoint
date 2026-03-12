@@ -1008,8 +1008,8 @@ CONTAINS
     !========================================================================
     chmID = 'SurfaceFluxAdj'
     
-    ! Note: Surface fluxes are 2D (Lat, Lon) per Species (Cat), so we use R4_3D 
-    ! Dimensions: (NX, NY, nAdvect)
+      ! Note: Surface flux adjoints are 2D (Lat, Lon) per species,
+      ! with third dimension indexed by species ID (nSpecies).
     CALL Init_and_Register(                                                  &
          Input_Opt  = Input_Opt,                                             &
          State_Chm  = State_Chm,                                             &
@@ -1017,7 +1017,7 @@ CONTAINS
          chmId      = chmId,                                                 &
          Ptr2Data   = State_Chm%SurfaceFluxAdj,                              &
          ! 3rd dimension is species
-         nSlots     = State_Chm%nAdvect,                                     &
+         nSlots     = State_Chm%nSpecies,                                    &
          RC         = RC                                                     &
                             )
 

@@ -246,7 +246,7 @@ SUBROUTINE  Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met,DT)
 
 ! INTERNALS
     INTEGER                        :: previous_units
-    INTEGER :: NFD
+  INTEGER :: NFD, NA, K
     INTEGER    :: RC 
     
     REAL(fp), POINTER :: surf_flux(:,:) => NULL()
@@ -264,9 +264,25 @@ SUBROUTINE  Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met,DT)
  !   _ASSERT(RC==GC_SUCCESS, 'Error calling CONVERT_SPC_UNITS')
 
 
-    NFD=Input_Opt%NFD 
-        
-    surf_flux=>State_Chm%SurfaceFlux(:,:,NFD)
+     NFD=Input_Opt%NFD
+
+     ! SurfaceFlux is dimensioned by nAdvect slots, but SurfaceFluxAdj is now
+     ! dimensioned by species ID (nSpecies). Map NFD -> advect slot for flux.
+     NA = -1
+     DO K = 1, State_Chm%nAdvect
+       IF ( State_Chm%Map_Advect(K) == NFD ) THEN
+         NA = K
+         EXIT
+       ENDIF
+     ENDDO
+
+     IF ( NA < 1 ) THEN
+       WRITE(*,*) 'ERROR in Integrate_Srf_Adjoint: species NFD=', NFD,      &
+              ' is not present in Map_Advect'
+       STOP
+     ENDIF
+
+     surf_flux=>State_Chm%SurfaceFlux(:,:,NA)
     rho_dry=>State_Met%AIRDEN(:,:,1)
     dz=>State_Met%BXHEIGHT(:,:,1)
 
@@ -283,12 +299,13 @@ SUBROUTINE  Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met,DT)
           State_Chm%SpeciesAdj(:,:,1,NFD) * ( surf_flux * DT / ( rho_dry * dz ) )
 
         IF ( Input_Opt%amIRoot ) THEN
-        WRITE(*,*) 'Integrate_Srf_Adjoint: NFD=', NFD,                        &
+           WRITE(*,*) 'Integrate_Srf_Adjoint: NFD=', NFD, ' NA=', NA,             &
              ' max|surf_flux|=', MAXVAL( ABS( surf_flux ) ),            &
              ' max|SpeciesAdj(sfc)|=',                                   &
              MAXVAL( ABS( State_Chm%SpeciesAdj(:,:,1,NFD) ) ),          &
              ' max|SurfaceFluxAdj|=',                                    &
-             MAXVAL( ABS( State_Chm%SurfaceFluxAdj(:,:,NFD) ) )
+               MAXVAL( ABS( State_Chm%SurfaceFluxAdj(:,:,NFD) ) ),       &
+             'max|surf_flux_all|=', MAXVAL( ABS( State_Chm%SurfaceFlux(:,:,:) ) )   
         ENDIF
 
       CALL Convert_Spc_Units(                                                  &
