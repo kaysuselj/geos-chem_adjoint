@@ -1805,6 +1805,32 @@ CONTAINS
 
 
 !
+! Compute the Surface Adjoint
+!
+
+
+
+! Get Emission fluxes from HEMCO and store in HcoState
+! MIGHT NEED TO GET THE STATE PRIOR TO EMISSIONS_RUN
+
+! Adjoint: unconditionally populate HcoState with emission fluxes
+HCO_PHASE = 1
+CALL EMISSIONS_RUN( Input_Opt, State_Chm, State_Diag, &
+                    State_Grid, State_Met, .TRUE., HCO_PHASE, RC )
+_ASSERT(RC==GC_SUCCESS, 'Error in EMISSIONS_RUN phase 1 (adjoint)')
+HCO_PHASE = 2
+CALL EMISSIONS_RUN( Input_Opt, State_Chm, State_Diag, &
+                    State_Grid, State_Met, .TRUE., HCO_PHASE, RC )
+_ASSERT(RC==GC_SUCCESS, 'Error in EMISSIONS_RUN phase 2 (adjoint)')
+
+
+! Get surface flux and save in State_Chm%Surface_Flux
+! NEED TO MAKE SURE TO CLEANLY INCLUSE ONLY SURFACE EMISSIONS (NO DRY DEP) IN THIS FLUX !!
+CALL Compute_Sflx_For_Vdiff( Input_Opt,  State_Chm, State_Diag,    &
+                                       State_Grid, State_Met, RC            )
+
+
+!
 ! Pop the final state back into State_Chm
 !
 
@@ -1814,22 +1840,9 @@ CONTAINS
      CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
          State_Grid, State_Met,State_Chm, trim(Iam) // ' adjoint at the end.', RC)
 
-
 ! update surface flux adjoint
-
-
-! Compute the surface flux
-! (which means getting emissions & drydep from HEMCO)
-! and store it in State_Chm%Surface_Flux
-    if (Input_Opt%amIRoot) write(*,*) 'HEMCO EMISSIONS=', Input_Opt%DoEmissions, ' TS_EMIS[s]=', HcoState%TS_EMIS
-     CALL Compute_Sflx_For_Vdiff( Input_Opt,  State_Chm, State_Diag,    &
-                                       State_Grid, State_Met, RC            )
-        _ASSERT(RC==GC_SUCCESS, 'Error calling COMPUTE_SFLX_FOR_VDIFF')
-    if (Input_Opt%amIRoot) write(*,*) 'HEMCO SFLX max|all|=',               &
-         MAXVAL( ABS( State_Chm%SurfaceFlux(:,:,:) ) ),                     &
-         ' sum(all)=', SUM( State_Chm%SurfaceFlux(:,:,:) )
-     DT=HcoState%TS_EMIS
-    CALL Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met,DT) 
+  DT=Input_Opt%TS_DYN 
+  CALL Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met,DT) 
      
 
 ENDIF ! IF (Is_Adjoint) THEN
