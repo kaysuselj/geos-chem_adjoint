@@ -733,7 +733,7 @@ CONTAINS
     USE PhysConstants,      ONLY : AIRMW
     USE Diagnostics_Mod,    ONLY :  Set_SpcAdj_Diagnostic
     USE Adjoint_Utils_Mod,  ONLY : Push_State,Pop_State,State_Snapshot, &
-                                   Setup_AdjorPert_State,Integrate_Srf_Adjoint
+                     Setup_Adjoint_ForwardPert,Integrate_Srf_Adjoint
 #endif
 
 #if defined( RRTMG )
@@ -1140,7 +1140,7 @@ CONTAINS
   ! Setup adjoint state variable if adjoint calculation and perturbation if forward simulation
   !  --- see possible options in Adjoint_Utils_Mod.F90:Setup_AdjPert_State ---
   !
-  IF (first) &  CALL Setup_AdjorPert_State(State_Chm,Input_Opt)
+   IF (first) &  CALL Setup_Adjoint_ForwardPert(State_Chm,State_Grid,Input_Opt)
   
   ENDIF 
    

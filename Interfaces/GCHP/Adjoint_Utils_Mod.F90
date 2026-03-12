@@ -24,7 +24,7 @@ MODULE Adjoint_Utils_Mod
   PUBLIC :: State_Snapshot
   PUBLIC :: Push_State
   PUBLIC :: Pop_State
-  PUBLIC :: Setup_Adjoint_State
+  PUBLIC :: Setup_Adjoint_ForwardPert
   PUBLIC :: Integrate_Srf_Adjoint
 
   ! Container for the saved data
@@ -93,7 +93,7 @@ CONTAINS
   END SUBROUTINE Pop_State
 
 
-  SUBROUTINE Setup_AdjorPert_State(State_Chm,Input_Opt)
+   SUBROUTINE Setup_Adjoint_ForwardPert(State_Chm,State_Grid,Input_Opt)
     !=====================================================================
     ! PURPOSE: Setup initial adjoint state (forward perturbation or adjoint 
     !          adjoint sensitivity seed) based on FD_TYPE setting
@@ -132,8 +132,9 @@ CONTAINS
     !    Adjoint mode:     Set SpeciesAdj = 1 for cells within region, 0 outside
     ! =====================================================================
   
-    TYPE(ChmState), INTENT(INOUT) ::  State_Chm
-    TYPE(OptInput), INTENT(INOUT) ::  Input_Opt
+   TYPE(ChmState), INTENT(INOUT) ::  State_Chm
+   TYPE(GrdState), INTENT(IN)    ::  State_Grid
+   TYPE(OptInput), INTENT(INOUT) ::  Input_Opt
   
     ! local vars
     INTEGER :: IFD,JFD,LFD,NFD
@@ -155,7 +156,7 @@ CONTAINS
 
     ! ===== GENERAL VALIDATION =====
     IF ( NFD < 1 .OR. NFD > State_Chm%nSpecies ) THEN
-       WRITE(*,*) 'ERROR in Setup_Adjoint_State: invalid NFD = ', NFD,      &
+      WRITE(*,*) 'ERROR in Setup_Adjoint_ForwardPert: invalid NFD = ', NFD,      &
               ' valid range is 1..', State_Chm%nSpecies
        STOP
     ENDIF
@@ -163,7 +164,7 @@ CONTAINS
      ! Validation for SPOT and LAYER: LFD must be valid
      IF ( ( Input_Opt%IS_FD_SPOT .OR. Input_Opt%IS_FD_LAYER ) .AND.         &
         ( LFD < 1 .OR. LFD > SIZE(State_Chm%SpeciesAdj,3) ) ) THEN
-       WRITE(*,*) 'ERROR in Setup_Adjoint_State: invalid LFD = ', LFD,      &
+      WRITE(*,*) 'ERROR in Setup_Adjoint_ForwardPert: invalid LFD = ', LFD,      &
               ' valid range is 1..', SIZE(State_Chm%SpeciesAdj,3)
        WRITE(*,*) '   FD_TYPE=SPOT or LAYER requires LFD to be set to a valid layer index'
        STOP
@@ -173,7 +174,7 @@ CONTAINS
      IF ( Input_Opt%IS_FD_SPOT_THIS_PET .AND. Input_Opt%IS_FD_SPOT ) THEN
        IF ( IFD < 1 .OR. IFD > SIZE(State_Chm%SpeciesAdj,1) .OR.            &
           JFD < 1 .OR. JFD > SIZE(State_Chm%SpeciesAdj,2) ) THEN
-         WRITE(*,*) 'ERROR in Setup_Adjoint_State: invalid IFD/JFD on this PET:', &
+         WRITE(*,*) 'ERROR in Setup_Adjoint_ForwardPert: invalid IFD/JFD on this PET:', &
                 IFD, JFD, ' valid I range 1..', SIZE(State_Chm%SpeciesAdj,1), &
                 ' J range 1..', SIZE(State_Chm%SpeciesAdj,2)
          WRITE(*,*) '   FD_TYPE=SPOT requires IFD, JFD, LFD to be specified in GCHP.rc'
@@ -216,7 +217,7 @@ CONTAINS
     IF (Input_Opt%IS_FD_SPOT_THIS_PET .and.  Input_Opt%IS_FD_SPOT) THEN
        
        IF (Is_Root) THEN
-          WRITE(*,*) '======== SETUP_ADJOINT_STATE: FD_TYPE=SPOT ========'
+          WRITE(*,*) '======== SETUP_ADJOINT_FORWARDPERT: FD_TYPE=SPOT ========'
           WRITE(*,*) 'Spot location: IFD=', IFD, ' JFD=', JFD, ' LFD=', LFD
        ENDIF
           
@@ -244,7 +245,7 @@ CONTAINS
     IF (Input_Opt%IS_FD_GLOBAL) THEN
 
        IF (Is_Root) THEN
-          WRITE(*,*) '======== SETUP_ADJOINT_STATE: FD_TYPE=GLOBAL ========'
+          WRITE(*,*) '======== SETUP_ADJOINT_FORWARDPERT: FD_TYPE=GLOBAL ========'
           IF (Is_Adj) THEN
              WRITE(*,*) 'Adjoint mode: setting all cells to 1'
           ELSE
@@ -275,13 +276,13 @@ CONTAINS
     IF (Input_Opt%IS_FD_LAYER) THEN
 
        IF (LFD < 1) THEN
-          WRITE(*,*) 'ERROR in Setup_Adjoint_State: FD_TYPE=LAYER requires LFD > 0'
+          WRITE(*,*) 'ERROR in Setup_Adjoint_ForwardPert: FD_TYPE=LAYER requires LFD > 0'
           WRITE(*,*) '   LFD found: ', LFD
           STOP
        ENDIF
 
        IF (Is_Root) THEN
-          WRITE(*,*) '======== SETUP_ADJOINT_STATE: FD_TYPE=LAYER ========'
+          WRITE(*,*) '======== SETUP_ADJOINT_FORWARDPERT: FD_TYPE=LAYER ========'
           WRITE(*,*) 'Layer index: LFD=', LFD
           IF (Is_Adj) THEN
              WRITE(*,*) 'Adjoint mode: setting layer', LFD, 'to 1'
@@ -315,14 +316,14 @@ CONTAINS
 
        IF (Input_Opt%IFD_MIN == -999.0_fp .OR. Input_Opt%IFD_MAX == -999.0_fp .OR. &
            Input_Opt%JFD_MIN == -999.0_fp .OR. Input_Opt%JFD_MAX == -999.0_fp) THEN
-          WRITE(*,*) 'ERROR in Setup_Adjoint_State: FD_TYPE=REGIONAL requires all bounds'
+          WRITE(*,*) 'ERROR in Setup_Adjoint_ForwardPert: FD_TYPE=REGIONAL requires all bounds'
           WRITE(*,*) '   IFD_MIN=', Input_Opt%IFD_MIN, ' IFD_MAX=', Input_Opt%IFD_MAX
           WRITE(*,*) '   JFD_MIN=', Input_Opt%JFD_MIN, ' JFD_MAX=', Input_Opt%JFD_MAX
           STOP
        ENDIF
 
        IF (Is_Root) THEN
-          WRITE(*,*) '======== SETUP_ADJOINT_STATE: FD_TYPE=REGIONAL ========'
+          WRITE(*,*) '======== SETUP_ADJOINT_FORWARDPERT: FD_TYPE=REGIONAL ========'
           WRITE(*,*) 'Region bounds: LON [', Input_Opt%IFD_MIN, ',', Input_Opt%IFD_MAX, ']'
           WRITE(*,*) '               LAT [', Input_Opt%JFD_MIN, ',', Input_Opt%JFD_MAX, ']'
           IF (Is_Adj) THEN
@@ -343,10 +344,10 @@ CONTAINS
                      ! Check if grid cell (I,J) is within regional bounds
                      ! NOTE: Exact bounds checking depends on your coordinate system
                      ! This assumes a simple rectangular region in lat/lon space
-                     IF (STATE_CHM%XMID(I,J) >= Input_Opt%IFD_MIN .AND. &
-                         STATE_CHM%XMID(I,J) <= Input_Opt%IFD_MAX .AND. &
-                         STATE_CHM%YMID(I,J) >= Input_Opt%JFD_MIN .AND. &
-                         STATE_CHM%YMID(I,J) <= Input_Opt%JFD_MAX) THEN
+                      IF (State_Grid%XMid(I,J) >= Input_Opt%IFD_MIN .AND. &
+                         State_Grid%XMid(I,J) <= Input_Opt%IFD_MAX .AND. &
+                         State_Grid%YMid(I,J) >= Input_Opt%JFD_MIN .AND. &
+                         State_Grid%YMid(I,J) <= Input_Opt%JFD_MAX) THEN
                         State_Chm%SpeciesAdj(I,J,L,NFD) = 1.0d0
                      ENDIF
                   ENDDO
@@ -365,10 +366,10 @@ CONTAINS
                DO J = 1, SIZE(State_Chm%Species(NFD)%Conc,2)
                   DO I = 1, SIZE(State_Chm%Species(NFD)%Conc,1)
                      ! Check if grid cell (I,J) is within regional bounds
-                     IF (STATE_CHM%XMID(I,J) >= Input_Opt%IFD_MIN .AND. &
-                         STATE_CHM%XMID(I,J) <= Input_Opt%IFD_MAX .AND. &
-                         STATE_CHM%YMID(I,J) >= Input_Opt%JFD_MIN .AND. &
-                         STATE_CHM%YMID(I,J) <= Input_Opt%JFD_MAX) THEN
+                      IF (State_Grid%XMid(I,J) >= Input_Opt%IFD_MIN .AND. &
+                         State_Grid%XMid(I,J) <= Input_Opt%IFD_MAX .AND. &
+                         State_Grid%YMid(I,J) >= Input_Opt%JFD_MIN .AND. &
+                         State_Grid%YMid(I,J) <= Input_Opt%JFD_MAX) THEN
                         State_Chm%Species(NFD)%Conc(I,J,L) = &
                              State_Chm%Species(NFD)%Conc(I,J,L) * Scale_Factor
                      ENDIF
@@ -387,7 +388,7 @@ CONTAINS
         State_Chm%SurfaceFluxAdj(:,:,:)=0.d0
   END IF        
 
-END SUBROUTINE Setup_AdjorPert_State
+END SUBROUTINE Setup_Adjoint_ForwardPert
   
   
   
