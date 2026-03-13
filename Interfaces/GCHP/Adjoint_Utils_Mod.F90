@@ -150,19 +150,20 @@ CONTAINS
   
     ! local vars
    INTEGER :: IFD,JFD,LFD,NFD
-    INTEGER :: I,J,L
-    REAL*8 :: CFN,Scale_Factor
-    CHARACTER(len=ESMF_MAXSTR) :: FD_SPEC,Msg
+   INTEGER :: I,J,L,L_START,L_END
+   REAL*8 :: CFN,Scale_Factor
+   CHARACTER(len=ESMF_MAXSTR) :: FD_SPEC,Msg
    LOGICAL :: Is_Adj,Is_Root,Has_FD_Mode
   
     
-    NFD     = Input_Opt%NFD
+   NFD     = Input_Opt%NFD
    IFD     = Input_Opt%IFD
    JFD     = Input_Opt%JFD
-    LFD     = Input_Opt%LFD
-    Is_Adj  = Input_Opt%IS_ADJOINT
-    Is_Root  = Input_Opt%amIRoot
-      Has_FD_Mode = Input_Opt%IS_FD_SPOT .OR. Input_Opt%IS_FD_GLOBAL .OR.   &
+   LFD     = Input_Opt%LFD
+   Is_Adj  = Input_Opt%IS_ADJOINT
+   Is_Root  = Input_Opt%amIRoot
+   ! IF not Had_FD_Mode, nothing needs to be changed
+   Has_FD_Mode = Input_Opt%IS_FD_SPOT .OR. Input_Opt%IS_FD_GLOBAL .OR.   &
                            Input_Opt%IS_FD_LAYER .OR. Input_Opt%IS_FD_REGIONAL
   
     Scale_Factor = 1.0d0
@@ -362,10 +363,31 @@ CONTAINS
           STOP
        ENDIF
 
+       ! Vertical selection for REGIONAL:
+       !   LFD = 0 or -999 => all levels
+       !   otherwise        => only level LFD
+       IF ( LFD == 0 .OR. LFD == -999 ) THEN
+          L_START = 1
+          L_END   = SIZE(State_Chm%SpeciesAdj,3)
+       ELSEIF ( LFD >= 1 .AND. LFD <= SIZE(State_Chm%SpeciesAdj,3) ) THEN
+          L_START = LFD
+          L_END   = LFD
+       ELSE
+          WRITE(*,*) 'ERROR in Setup_Adjoint_ForwardPert: invalid LFD for FD_TYPE=REGIONAL:', LFD
+          WRITE(*,*) '   Use LFD=0 or -999 for all levels, or a valid level in range 1..', &
+                     SIZE(State_Chm%SpeciesAdj,3)
+          STOP
+       ENDIF
+
        IF (Is_Root) THEN
           WRITE(*,*) '======== SETUP_ADJOINT_FORWARDPERT: FD_TYPE=REGIONAL ========'
           WRITE(*,*) 'Region bounds: LAT [', Input_Opt%FD_LAT_MIN, ',', Input_Opt%FD_LAT_MAX, ']'
           WRITE(*,*) '               LON [', Input_Opt%FD_LON_MIN, ',', Input_Opt%FD_LON_MAX, ']'
+          IF ( LFD == 0 .OR. LFD == -999 ) THEN
+             WRITE(*,*) 'Levels: all'
+          ELSE
+             WRITE(*,*) 'Level: LFD=', LFD
+          ENDIF
           IF (Is_Adj) THEN
              WRITE(*,*) 'Adjoint mode: setting region to 1'
           ELSE
@@ -378,7 +400,7 @@ CONTAINS
             State_Chm%SpeciesAdj(:,:,:,:) = 0.d0
             
             ! Loop over all grid cells and set adjoint to 1 if within region bounds
-            DO L = 1, SIZE(State_Chm%SpeciesAdj,3)
+            DO L = L_START, L_END
                DO J = 1, SIZE(State_Chm%SpeciesAdj,2)
                   DO I = 1, SIZE(State_Chm%SpeciesAdj,1)
                      ! Check if grid cell (I,J) is within regional bounds
@@ -398,11 +420,13 @@ CONTAINS
                WRITE(*,*) ' Setting REGIONAL Adjoint Forcing to 1'
                WRITE(*,*) '   Region: LAT=[', Input_Opt%FD_LAT_MIN, ',', Input_Opt%FD_LAT_MAX, ']'
                WRITE(*,*) '           LON=[', Input_Opt%FD_LON_MIN, ',', Input_Opt%FD_LON_MAX, ']'
+               WRITE(*,*) '         LEVELS=[', L_START, ',', L_END, ']'
+
             ENDIF
         ELSE
             ! Forward: Apply Scale Factor to all grid cells within the region
             CALL WRITE_PARALLEL(TRIM(Msg)//' REGIONAL')
-            DO L = 1, SIZE(State_Chm%Species(NFD)%Conc,3)
+            DO L = L_START, L_END
                DO J = 1, SIZE(State_Chm%Species(NFD)%Conc,2)
                   DO I = 1, SIZE(State_Chm%Species(NFD)%Conc,1)
                      ! Check if grid cell (I,J) is within regional bounds
@@ -532,6 +556,8 @@ SUBROUTINE  Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met)
         IF ( Input_Opt%amIRoot ) THEN
            WRITE(*,*) 'Integrate_Srf_Adjoint: NFD=', NFD, ' NA=', NA,             &
              ' max|surf_flux|=', MAXVAL( ABS( surf_flux ) ),            &
+                   ' max|rho_dry|=', MAXVAL( ABS( rho_dry ) ),                &
+                   ' max|dz|=', MAXVAL( ABS( dz ) ),                          &
              ' max|SpeciesAdj(sfc)|=',                                   &
              MAXVAL( ABS( State_Chm%SpeciesAdj(:,:,1,NFD) ) ),          &
              ' max|SurfaceFluxAdj|=',                                    &
