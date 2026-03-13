@@ -157,7 +157,7 @@ CONTAINS
     CHARACTER(LEN=ESMF_MAXSTR)     :: FD_SPEC
     REAL(fp)                       :: d, dmin
     INTEGER                        :: imin, jmin, NFD, LFD
-   INTEGER                        :: FD_LAT, FD_LON
+   INTEGER                        :: IFD, JFD
     CHARACTER(LEN=ESMF_MAXSTR)     :: FD_TYPE
 
    ! At present, we are unable to load cube-sphere files through ExtData
@@ -265,7 +265,7 @@ CONTAINS
     ! - Design experiments for validation of adjoint sensitivities (if FD_STEP=1 or 2)
     ! - FD_TYPE define define how the perturbation is applied:
     !    - FD_TYPE='GLOBAL' - perturb all grid cells by a small amount
-    !    - FD_TYPE='SPOT' - perturb a single grid cell (defined by FD_LAT/FD_LON/LFD or FD_LAT/FD_LON,LFD)
+   !    - FD_TYPE='SPOT' - perturb a single grid cell (defined by IFD/JFD/LFD or nearest lat/lon point)
     !    - FD_TYPE='LAYER' - perturb all grid cells in a given layer (defined by LFD)
     ! - FD_STEP defines the perturbation magnitude:
     !    - FD_STEP=1  - increase initial concentration by 10% 
@@ -275,7 +275,7 @@ CONTAINS
     ! - FD_TYPE defines the initial adjoint variable:
     !  - FD_TYPE='GLOBAL' AND - Adjoint is 1 for all grid cells (for species NFD)
     !  - FD_TYPE='LAYER' - Adjoint is 1 for all grid cells (for species NFD) at layer LFD
-    !  - FD_TYPE='SPOT' - Adjoint is 1 for grid cell (FD_LAT,FD_LON,LFD) or closest to (FD_LAT,FD_LON,LFD) 
+   !  - FD_TYPE='SPOT' - Adjoint is 1 for grid cell (IFD,JFD,LFD) or nearest lat/lon point 
     !
     !
     ! 
@@ -331,12 +331,12 @@ CONTAINS
 
       call WRITE_PARALLEL('FD_SPEC'//FD_SPEC)
 
-        call ESMF_ConfigGetAttribute(CF, FD_LAT, &
-           Label="FD_LAT_IDX:", default=-1, RC=STATUS)
+      call ESMF_ConfigGetAttribute(CF, IFD, &
+         Label="IFD:", default=-1, RC=STATUS)
        _VERIFY(STATUS)
 
-       call ESMF_ConfigGetAttribute(CF, FD_LON, &
-           Label="FD_LON_IDX:", default=-1, RC=STATUS)
+      call ESMF_ConfigGetAttribute(CF, JFD, &
+         Label="JFD:", default=-1, RC=STATUS)
        _VERIFY(STATUS)
 
        ! Get the ESMF grid attached to this gridded component
@@ -345,19 +345,19 @@ CONTAINS
        ! Get the upper and lower bounds of on each PET using MAPL
        CALL MAPL_GridGetInterior( Grid, IL_PET, IU_PET, JL_PET, JU_PET )
 
-       ! See if we specified FD_LAT and FD_LON in GCHP.rc
-       IF ( FD_LAT > 0 .and. FD_LON > 0 ) THEN
+       ! See if we specified IFD and JFD in GCHP.rc
+       IF ( IFD > 0 .and. JFD > 0 ) THEN
 
-          if (IL_PET .le. FD_LAT .and. FD_LAT .le. IU_PET .and. &
-               JL_PET .le. FD_LON .and. FD_LON .le. JU_PET) THEN
+          if (IL_PET .le. IFD .and. IFD .le. IU_PET .and. &
+               JL_PET .le. JFD .and. JFD .le. JU_PET) THEN
              Input_Opt%IS_FD_SPOT_THIS_PET = .true.
-             Input_opt%FD_LAT = FD_LAT - IL_PET + 1
-             Input_Opt%FD_LON = FD_LON - JL_PET + 1
+             Input_opt%IFD = IFD - IL_PET + 1
+             Input_Opt%JFD = JFD - JL_PET + 1
 
              ! set these for debug printing
              DMIN = 0.0
-             IMIN = Input_Opt%FD_LAT
-             JMIN = Input_Opt%FD_LON
+             IMIN = Input_Opt%IFD
+             JMIN = Input_Opt%JFD
           ENDIF
 
        ELSE
@@ -371,7 +371,7 @@ CONTAINS
           _VERIFY(STATUS)
 
          IF (Input_Opt%IS_FD_SPOT) THEN
-          _ASSERT( FD_LAT_COORD .ne. -999.0d0 .and. FD_LON_COORD .ne. -999.0d0, 'FD_SPOT requires either FD_LAT_IDX/FD_LON_IDX or FD_LAT/FD_LON in GCHP.rc')
+          _ASSERT( FD_LAT_COORD .ne. -999.0d0 .and. FD_LON_COORD .ne. -999.0d0, 'FD_SPOT requires either IFD/JFD or latitude/longitude coordinates in GCHP.rc')
          ENDIF
 
           dmin = 99999.9
@@ -396,8 +396,8 @@ CONTAINS
           if (dmin < 3.2) then
              ! getting the global grid offset is possible, see Chem_GridCompMod.F90:Extract_
              Input_Opt%IS_FD_SPOT_THIS_PET = .true.
-             Input_Opt%FD_LAT = IMIN
-             Input_Opt%FD_LON = JMIN
+             Input_Opt%IFD = IMIN
+             Input_Opt%JFD = JMIN
 
           end if
        ENDIF
@@ -426,32 +426,6 @@ CONTAINS
           call ESMF_ConfigGetAttribute(CF, Input_Opt%FD_LON_MAX, &
             Label="FD_LON_MAX:", default=-999.0_fp, RC=STATUS)
           _VERIFY(STATUS)
-
-          ! Validate REGIONAL parameters
-          _ASSERT(Input_Opt%FD_LAT_MIN /= -999.0_fp .and. Input_Opt%FD_LAT_MAX /= -999.0_fp, &
-               'FD_TYPE=REGIONAL requires FD_LAT_MIN and FD_LAT_MAX in GCHP.rc')
-          _ASSERT(Input_Opt%FD_LON_MIN /= -999.0_fp .and. Input_Opt%FD_LON_MAX /= -999.0_fp, &
-               'FD_TYPE=REGIONAL requires FD_LON_MIN and FD_LON_MAX in GCHP.rc')
-
-          ! Validate longitude ranges: -180 to 180
-          _ASSERT(Input_Opt%FD_LAT_MIN >= -180.0_fp .and. Input_Opt%FD_LAT_MIN <= 180.0_fp, &
-               'FD_LAT_MIN must be between -180 and 180')
-          _ASSERT(Input_Opt%FD_LAT_MAX >= -180.0_fp .and. Input_Opt%FD_LAT_MAX <= 180.0_fp, &
-               'FD_LAT_MAX must be between -180 and 180')
-          _ASSERT(Input_Opt%FD_LAT_MIN <= Input_Opt%FD_LAT_MAX, &
-               'FD_LAT_MIN must be <= FD_LAT_MAX')
-
-          ! Validate latitude ranges: -90 to 90
-          _ASSERT(Input_Opt%FD_LON_MIN >= -90.0_fp .and. Input_Opt%FD_LON_MIN <= 90.0_fp, &
-               'FD_LON_MIN must be between -90 and 90')
-          _ASSERT(Input_Opt%FD_LON_MAX >= -90.0_fp .and. Input_Opt%FD_LON_MAX <= 90.0_fp, &
-               'FD_LON_MAX must be between -90 and 90')
-          _ASSERT(Input_Opt%FD_LON_MIN <= Input_Opt%FD_LON_MAX, &
-               'FD_LON_MIN must be <= FD_LON_MAX')
-
-          call WRITE_PARALLEL('FD_TYPE=REGIONAL: Setting adjoint for region')
-          WRITE(*,*) 'REGIONAL bounds: LON(FD_LAT)=[', Input_Opt%FD_LAT_MIN, ',', Input_Opt%FD_LAT_MAX, ']'
-          WRITE(*,*) '                 LAT(FD_LON)=[', Input_Opt%FD_LON_MIN, ',', Input_Opt%FD_LON_MAX, ']'
        ENDIF
 
    !       ! Read in cost function region
@@ -524,10 +498,10 @@ CONTAINS
    !          Input_Opt%CF_LMIN = CF_LMIN
    !          Input_Opt%CF_LMAX = CF_LMAX
    !       ELSEIF (Input_Opt%IS_FD_SPOT_THIS_PET) THEN
-   !          Input_Opt%CF_IMIN = INT(Input_Opt%FD_LAT)
-   !          Input_Opt%CF_IMAX = INT(Input_Opt%FD_LAT)
-   !          Input_Opt%CF_JMIN = INT(Input_Opt%FD_LON)
-   !          Input_Opt%CF_JMAX = INT(Input_Opt%FD_LON)
+   !          Input_Opt%CF_IMIN = Input_Opt%IFD
+   !          Input_Opt%CF_IMAX = Input_Opt%IFD
+   !          Input_Opt%CF_JMIN = Input_Opt%JFD
+   !          Input_Opt%CF_JMAX = Input_Opt%JFD
    !          Input_Opt%CF_LMIN = Input_Opt%LFD
    !          Input_Opt%CF_LMAX = Input_Opt%LFD
    !       WRITE(*,1027) Input_Opt%thisCPU,   &
@@ -1147,7 +1121,7 @@ CONTAINS
     if (Input_Opt%amIRoot) then
         print *,'Kay, Adjoint variables at the start of gchp_chunk_mod.F90'
         print *, 'first', first
-        print *, 'Input_Opt:FD_LAT,FD_LON,LFD,NFD',Input_Opt%FD_LAT,Input_Opt%FD_LON,Input_Opt%LFD,Input_Opt%NFD
+      print *, 'Input_Opt:IFD,JFD,LFD,NFD',Input_Opt%IFD,Input_Opt%JFD,Input_Opt%LFD,Input_Opt%NFD
         print *, 'StateGrid:NX,NY,NZ',State_Grid%NX,State_Grid%NY,State_Grid%NZ
         if ( Input_Opt%NFD >= 1 .and. Input_Opt%NFD <= State_Chm%nSpecies .and. &
              Input_Opt%LFD >= 1 .and. Input_Opt%LFD <= State_Grid%NZ ) then
@@ -1868,11 +1842,11 @@ ENDIF ! IF (Is_Adjoint) THEN
 #endif
 
 #ifdef ADJOINT
-       if (Input_Opt%IS_FD_SPOT_THIS_PET .and. Input_opt%FD_LAT > 0) THEN
+             if (Input_Opt%IS_FD_SPOT_THIS_PET .and. Input_opt%IFD > 0) THEN
        DO N = 1, State_Chm%nSpecies
           ThisSpc => State_Chm%SpcData(N)%Info
           write(*,*) 'SpcAdj(', TRIM(thisSpc%Name), ') = ',  &
-               State_Chm%SpeciesAdj(INT(Input_Opt%FD_LAT),INT(Input_Opt%FD_LON),Input_Opt%LFD,N)
+                State_Chm%SpeciesAdj(Input_Opt%IFD,Input_Opt%JFD,Input_Opt%LFD,N)
        ENDDO
        ENDIF
     !=======================================================================
@@ -1891,9 +1865,9 @@ ENDIF ! IF (Is_Adjoint) THEN
          ! State_Chm%SpeciesAdj(:,:,:,N) = State_Chm%SpeciesAdj(:,:,:,N) * State_Chm%Species(N)%Conc(:,:,:) * &
          !      ( AIRMW / State_Chm%SpcData(N)%Info%MW_g )
 
-          if (Input_Opt%IS_FD_SPOT_THIS_PET .and. Input_Opt%FD_LAT > 0) THEN
+           if (Input_Opt%IS_FD_SPOT_THIS_PET .and. Input_Opt%IFD > 0) THEN
              write(*,*) 'After conversion ',  &
-                  State_Chm%SpeciesAdj(INT(Input_Opt%FD_LAT),INT(Input_Opt%FD_LON),Input_Opt%LFD,N)
+              State_Chm%SpeciesAdj(Input_Opt%IFD,Input_Opt%JFD,Input_Opt%LFD,N)
           ENDIF
        ENDDO
 

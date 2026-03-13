@@ -3411,7 +3411,7 @@ CONTAINS
 #endif
 #ifdef ADJOINT
     ! Finite difference test variables
-    INTEGER                        :: FD_LAT, FD_LON, LFD
+   INTEGER                        :: IFD, JFD, LFD
     REAL*8                         :: CFN
     CHARACTER(len=ESMF_MAXSTR)     :: FD_SPEC
 #endif
@@ -3480,8 +3480,8 @@ CONTAINS
 !#ifdef ADJOINT
 !    IF (Input_Opt%IS_FD_SPOT_THIS_PET .and. .not. Input_Opt%IS_FD_GLOBAL) THEN
 !       FD_SPEC = transfer(state_chm%SpcData(Input_Opt%NFD)%Info%Name, FD_SPEC)
-!       FD_LAT = Input_Opt%FD_LAT
-!       FD_LON = Input_Opt%FD_LON
+!       IFD = Input_Opt%IFD
+!       JFD = Input_Opt%JFD
 !       LFD = Input_Opt%LFD
 !       NFD = Input_Opt%NFD
 !       ! print out the cost function

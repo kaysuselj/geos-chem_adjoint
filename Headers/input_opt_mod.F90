@@ -437,7 +437,7 @@ MODULE Input_Opt_Mod
      LOGICAL                     :: IS_FD_SPOT, IS_FD_GLOBAL, IS_FD_LAYER, IS_FD_REGIONAL
      INTEGER                     :: FD_STEP
      LOGICAL                     :: IS_FD_SPOT_THIS_PET
-    REAL(fp)                    :: FD_LAT, FD_LON
+    INTEGER                     :: IFD, JFD
     INTEGER                     :: NFD, LFD, NFD_ADJ
 !    INTEGER                     :: CF_IMIN, CF_IMAX
 !    INTEGER                     :: CF_JMIN, CF_JMAX
@@ -937,8 +937,8 @@ CONTAINS
     Input_Opt%IS_FD_REGIONAL         = .FALSE.
     Input_Opt%IS_FD_SPOT_THIS_PET    = .FALSE.
     Input_Opt%FD_STEP                = -999
-    Input_Opt%FD_LAT                    = -999.0_fp
-    Input_Opt%FD_LON                    = -999.0_fp
+    Input_Opt%IFD                    = -999
+    Input_Opt%JFD                    = -999
     Input_Opt%NFD                    = -999
     Input_Opt%LFD                    = -999
     Input_Opt%FD_LAT_MIN                = -999.0_fp

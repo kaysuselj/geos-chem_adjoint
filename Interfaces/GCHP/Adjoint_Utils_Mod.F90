@@ -120,11 +120,11 @@ CONTAINS
     !    Adjoint mode:     Set SpeciesAdj = 1 everywhere
     !
    ! 2. SPOT    - Perturb/set adjoint for a SINGLE grid cell
-   !    Required inputs:  FD_SPEC, FD_STEP, (FD_LAT, FD_LON, LFD)
+   !    Required inputs:  FD_SPEC, FD_STEP, (IFD, JFD, LFD)
     !                      NFD will be set from FD_SPEC
     !    Optional inputs:  None
-   !    Forward mode:     Scale concentration at (FD_LAT, FD_LON, LFD) as defined by FD_STEP
-   !    Adjoint mode:     Set SpeciesAdj(FD_LAT, FD_LON, LFD, NFD) = 1, rest = 0
+   !    Forward mode:     Scale concentration at (IFD, JFD, LFD) as defined by FD_STEP
+   !    Adjoint mode:     Set SpeciesAdj(IFD, JFD, LFD, NFD) = 1, rest = 0
     !
     ! 3. LAYER   - Perturb/set adjoint for all cells in ONE vertical layer
     !    Required inputs:  FD_SPEC, FD_STEP, LFD (layer index, 1-based)
@@ -137,10 +137,10 @@ CONTAINS
    !    Required inputs:  FD_SPEC, FD_STEP, FD_LAT_MIN, FD_LAT_MAX, FD_LON_MIN, FD_LON_MAX
     !                      NFD will be set from FD_SPEC
     !    Optional inputs:  LFD (if 0 or -999, uses all layers)
-   !    Coordinate range: FD_LAT (longitude) ∈ [-180, 180]
-   !                      FD_LON (latitude)  ∈ [-90, 90]
-   !    Forward mode:     Scale concentrations where XMID ∈ [FD_LAT_MIN,FD_LAT_MAX]
-   !                      AND YMID ∈ [FD_LON_MIN,FD_LON_MAX] as defined by FD_STEP
+   !    Coordinate range: FD_LAT_MIN/MAX (latitude)  ∈ [-90, 90]
+   !                      FD_LON_MIN/MAX (longitude) ∈ [-180, 180]
+   !    Forward mode:     Scale concentrations where YMID ∈ [FD_LAT_MIN,FD_LAT_MAX]
+   !                      AND XMID ∈ [FD_LON_MIN,FD_LON_MAX] as defined by FD_STEP
     !    Adjoint mode:     Set SpeciesAdj = 1 for cells within region, 0 outside
     ! =====================================================================
   
@@ -149,7 +149,7 @@ CONTAINS
    TYPE(OptInput), INTENT(INOUT) ::  Input_Opt
   
     ! local vars
-    INTEGER :: FD_LAT,FD_LON,LFD,NFD
+   INTEGER :: IFD,JFD,LFD,NFD
     INTEGER :: I,J,L
     REAL*8 :: CFN,Scale_Factor
     CHARACTER(len=ESMF_MAXSTR) :: FD_SPEC,Msg
@@ -157,8 +157,8 @@ CONTAINS
   
     
     NFD     = Input_Opt%NFD
-    FD_LAT     = Input_Opt%FD_LAT
-    FD_LON     = Input_Opt%FD_LON
+   IFD     = Input_Opt%IFD
+   JFD     = Input_Opt%JFD
     LFD     = Input_Opt%LFD
     Is_Adj  = Input_Opt%IS_ADJOINT
     Is_Root  = Input_Opt%amIRoot
@@ -184,14 +184,14 @@ CONTAINS
        STOP
      ENDIF
 
-     ! Validation for SPOT: FD_LAT and FD_LON must be valid on this PET
+       ! Validation for SPOT: IFD and JFD must be valid on this PET
      IF ( Input_Opt%IS_FD_SPOT_THIS_PET .AND. Input_Opt%IS_FD_SPOT ) THEN
-       IF ( FD_LAT < 1 .OR. FD_LAT > SIZE(State_Chm%SpeciesAdj,1) .OR.            &
-          FD_LON < 1 .OR. FD_LON > SIZE(State_Chm%SpeciesAdj,2) ) THEN
-         WRITE(*,*) 'ERROR in Setup_Adjoint_ForwardPert: invalid FD_LAT/FD_LON on this PET:', &
-                FD_LAT, FD_LON, ' valid I range 1..', SIZE(State_Chm%SpeciesAdj,1), &
+          IF ( IFD < 1 .OR. IFD > SIZE(State_Chm%SpeciesAdj,1) .OR.            &
+               JFD < 1 .OR. JFD > SIZE(State_Chm%SpeciesAdj,2) ) THEN
+             WRITE(*,*) 'ERROR in Setup_Adjoint_ForwardPert: invalid IFD/JFD on this PET:', &
+                        IFD, JFD, ' valid I range 1..', SIZE(State_Chm%SpeciesAdj,1), &
                 ' J range 1..', SIZE(State_Chm%SpeciesAdj,2)
-         WRITE(*,*) '   FD_TYPE=SPOT requires FD_LAT, FD_LON, LFD to be specified in GCHP.rc'
+             WRITE(*,*) '   FD_TYPE=SPOT requires IFD, JFD, LFD to be specified in GCHP.rc'
          STOP
        ENDIF
      ENDIF
@@ -224,7 +224,7 @@ CONTAINS
     ! ------------------------------------------------------------------
     ! LOGIC BLOCK: SPOT PERTURBATION
     ! ------------------------------------------------------------------
-    ! Required: FD_LAT, FD_LON, LFD (set via gchp_chunk_mod config reading)
+   ! Required: IFD, JFD, LFD (set via gchp_chunk_mod config reading)
     ! Check: Ensure inputs are valid before proceeding
     ! ------------------------------------------------------------------
   
@@ -232,20 +232,20 @@ CONTAINS
        
        IF (Is_Root) THEN
           WRITE(*,*) '======== SETUP_ADJOINT_FORWARDPERT: FD_TYPE=SPOT ========'
-          WRITE(*,*) 'Spot location: FD_LAT=', FD_LAT, ' FD_LON=', FD_LON, ' LFD=', LFD
+          WRITE(*,*) 'Spot location: IFD=', IFD, ' JFD=', JFD, ' LFD=', LFD
        ENDIF
           
        IF (Is_Adj) THEN    
            State_Chm%SpeciesAdj(:,:,:,:) = 0.d0
-           State_Chm%SpeciesAdj(FD_LAT,FD_LON,LFD,NFD)=1.0d0
+            State_Chm%SpeciesAdj(IFD,JFD,LFD,NFD)=1.0d0
            IF (Is_Root) & 
-           WRITE(*,*) ' Setting Single Forcing to 1 (fd_lat,fd_lon,lfd,nfd)',FD_LAT,FD_LON,LFD,NFD
+            WRITE(*,*) ' Setting Single Forcing to 1 (ifd,jfd,lfd,nfd)',IFD,JFD,LFD,NFD
        ELSE
        
        ! Forward: Apply scale factor to a single point
           WRITE(*,*) TRIM(Msg)
-            State_Chm%Species(NFD)%Conc(FD_LAT,FD_LON,LFD) = &
-                State_Chm%Species(NFD)%Conc(FD_LAT,FD_LON,LFD) * Scale_Factor
+                  State_Chm%Species(NFD)%Conc(IFD,JFD,LFD) = &
+                        State_Chm%Species(NFD)%Conc(IFD,JFD,LFD) * Scale_Factor
        ENDIF
     ENDIF
 
@@ -336,10 +336,36 @@ CONTAINS
           STOP
        ENDIF
 
+       ! Validate latitude bounds
+       IF (Input_Opt%FD_LAT_MIN < -90.0_fp .OR. Input_Opt%FD_LAT_MIN > 90.0_fp .OR. &
+           Input_Opt%FD_LAT_MAX < -90.0_fp .OR. Input_Opt%FD_LAT_MAX > 90.0_fp) THEN
+          WRITE(*,*) 'ERROR in Setup_Adjoint_ForwardPert: FD_LAT bounds must be in [-90, 90]'
+          WRITE(*,*) '   FD_LAT_MIN=', Input_Opt%FD_LAT_MIN, ' FD_LAT_MAX=', Input_Opt%FD_LAT_MAX
+          STOP
+       ENDIF
+
+       ! Validate longitude bounds
+       IF (Input_Opt%FD_LON_MIN < -180.0_fp .OR. Input_Opt%FD_LON_MIN > 180.0_fp .OR. &
+           Input_Opt%FD_LON_MAX < -180.0_fp .OR. Input_Opt%FD_LON_MAX > 180.0_fp) THEN
+          WRITE(*,*) 'ERROR in Setup_Adjoint_ForwardPert: FD_LON bounds must be in [-180, 180]'
+          WRITE(*,*) '   FD_LON_MIN=', Input_Opt%FD_LON_MIN, ' FD_LON_MAX=', Input_Opt%FD_LON_MAX
+          STOP
+       ENDIF
+
+       IF (Input_Opt%FD_LAT_MIN > Input_Opt%FD_LAT_MAX) THEN
+          WRITE(*,*) 'ERROR in Setup_Adjoint_ForwardPert: FD_LAT_MIN must be <= FD_LAT_MAX'
+          STOP
+       ENDIF
+
+       IF (Input_Opt%FD_LON_MIN > Input_Opt%FD_LON_MAX) THEN
+          WRITE(*,*) 'ERROR in Setup_Adjoint_ForwardPert: FD_LON_MIN must be <= FD_LON_MAX'
+          STOP
+       ENDIF
+
        IF (Is_Root) THEN
           WRITE(*,*) '======== SETUP_ADJOINT_FORWARDPERT: FD_TYPE=REGIONAL ========'
-          WRITE(*,*) 'Region bounds: LON [', Input_Opt%FD_LAT_MIN, ',', Input_Opt%FD_LAT_MAX, ']'
-          WRITE(*,*) '               LAT [', Input_Opt%FD_LON_MIN, ',', Input_Opt%FD_LON_MAX, ']'
+          WRITE(*,*) 'Region bounds: LAT [', Input_Opt%FD_LAT_MIN, ',', Input_Opt%FD_LAT_MAX, ']'
+          WRITE(*,*) '               LON [', Input_Opt%FD_LON_MIN, ',', Input_Opt%FD_LON_MAX, ']'
           IF (Is_Adj) THEN
              WRITE(*,*) 'Adjoint mode: setting region to 1'
           ELSE
@@ -358,10 +384,10 @@ CONTAINS
                      ! Check if grid cell (I,J) is within regional bounds
                      ! NOTE: Exact bounds checking depends on your coordinate system
                      ! This assumes a simple rectangular region in lat/lon space
-                      IF (State_Grid%XMid(I,J) >= Input_Opt%FD_LAT_MIN .AND. &
-                         State_Grid%XMid(I,J) <= Input_Opt%FD_LAT_MAX .AND. &
-                         State_Grid%YMid(I,J) >= Input_Opt%FD_LON_MIN .AND. &
-                         State_Grid%YMid(I,J) <= Input_Opt%FD_LON_MAX) THEN
+                      IF (State_Grid%YMid(I,J) >= Input_Opt%FD_LAT_MIN .AND. &
+                         State_Grid%YMid(I,J) <= Input_Opt%FD_LAT_MAX .AND. &
+                         State_Grid%XMid(I,J) >= Input_Opt%FD_LON_MIN .AND. &
+                         State_Grid%XMid(I,J) <= Input_Opt%FD_LON_MAX) THEN
                         State_Chm%SpeciesAdj(I,J,L,NFD) = 1.0d0
                      ENDIF
                   ENDDO
@@ -370,8 +396,8 @@ CONTAINS
             
             IF (Is_Root) THEN
                WRITE(*,*) ' Setting REGIONAL Adjoint Forcing to 1'
-               WRITE(*,*) '   Region: LON=[', Input_Opt%FD_LAT_MIN, ',', Input_Opt%FD_LAT_MAX, ']'
-               WRITE(*,*) '           LAT=[', Input_Opt%FD_LON_MIN, ',', Input_Opt%FD_LON_MAX, ']'
+               WRITE(*,*) '   Region: LAT=[', Input_Opt%FD_LAT_MIN, ',', Input_Opt%FD_LAT_MAX, ']'
+               WRITE(*,*) '           LON=[', Input_Opt%FD_LON_MIN, ',', Input_Opt%FD_LON_MAX, ']'
             ENDIF
         ELSE
             ! Forward: Apply Scale Factor to all grid cells within the region
@@ -380,10 +406,10 @@ CONTAINS
                DO J = 1, SIZE(State_Chm%Species(NFD)%Conc,2)
                   DO I = 1, SIZE(State_Chm%Species(NFD)%Conc,1)
                      ! Check if grid cell (I,J) is within regional bounds
-                      IF (State_Grid%XMid(I,J) >= Input_Opt%FD_LAT_MIN .AND. &
-                         State_Grid%XMid(I,J) <= Input_Opt%FD_LAT_MAX .AND. &
-                         State_Grid%YMid(I,J) >= Input_Opt%FD_LON_MIN .AND. &
-                         State_Grid%YMid(I,J) <= Input_Opt%FD_LON_MAX) THEN
+                      IF (State_Grid%YMid(I,J) >= Input_Opt%FD_LAT_MIN .AND. &
+                         State_Grid%YMid(I,J) <= Input_Opt%FD_LAT_MAX .AND. &
+                         State_Grid%XMid(I,J) >= Input_Opt%FD_LON_MIN .AND. &
+                         State_Grid%XMid(I,J) <= Input_Opt%FD_LON_MAX) THEN
                         State_Chm%Species(NFD)%Conc(I,J,L) = &
                              State_Chm%Species(NFD)%Conc(I,J,L) * Scale_Factor
                      ENDIF
