@@ -467,12 +467,13 @@ SUBROUTINE  Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met)
 
 ! INTERNALS
     INTEGER                        :: previous_units
-  INTEGER :: NFD, NA, K
+   INTEGER :: NFD, NA, K, N
     INTEGER    :: RC 
     
     REAL(fp), POINTER :: surf_flux(:,:) => NULL()
     REAL(fp), POINTER :: rho_dry(:,:)   => NULL()
     REAL(fp), POINTER :: dz(:,:)        => NULL()
+   REAL(fp) :: max_speciesadj_n, max_surfacefluxadj_n
     
     CALL Convert_Spc_Units(                                                  &
          Input_Opt      = Input_Opt,                                         &
@@ -537,6 +538,22 @@ SUBROUTINE  Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met)
           STOP
        ENDIF
 
+       ! Ensure only target species NFD carries surface adjoint values in this routine.
+       DO N = 1, State_Chm%nSpecies
+          IF ( N == NFD ) CYCLE
+
+          max_speciesadj_n     = MAXVAL( ABS( State_Chm%SpeciesAdj(:,:,1,N) ) )
+          max_surfacefluxadj_n = MAXVAL( ABS( State_Chm%SurfaceFluxAdj(:,:,N) ) )
+
+          IF ( max_speciesadj_n /= 0.0_fp .OR. max_surfacefluxadj_n /= 0.0_fp ) THEN
+             WRITE(*,*) 'ERROR in Integrate_Srf_Adjoint: non-target species has non-zero adjoint values'
+             WRITE(*,*) '       target NFD=', NFD, ' offending N=', N
+             WRITE(*,*) '       max|SpeciesAdj(:,:,1,N)|=', max_speciesadj_n
+             WRITE(*,*) '       max|SurfaceFluxAdj(:,:,N)|=', max_surfacefluxadj_n
+             STOP
+          ENDIF
+       ENDDO
+
      surf_flux=>State_Chm%SurfaceFlux(:,:,NA)
     rho_dry=>State_Met%AIRDEN(:,:,1)
     dz=>State_Met%BXHEIGHT(:,:,1)
@@ -560,8 +577,12 @@ SUBROUTINE  Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met)
                    ' max|dz|=', MAXVAL( ABS( dz ) ),                          &
              ' max|SpeciesAdj(sfc)|=',                                   &
              MAXVAL( ABS( State_Chm%SpeciesAdj(:,:,1,NFD) ) ),          &
+                   ' max|SpeciesAdj(global)|=',                                &
+                   MAXVAL( ABS( State_Chm%SpeciesAdj(:,:,:,NFD) ) ),          &
              ' max|SurfaceFluxAdj|=',                                    &
                MAXVAL( ABS( State_Chm%SurfaceFluxAdj(:,:,NFD) ) ),       &
+                   ' max|SurfaceFluxAdj(global)|=',                            &
+                      MAXVAL( ABS( State_Chm%SurfaceFluxAdj(:,:,:) ) ),        &
              'max|surf_flux_all|=', MAXVAL( ABS( State_Chm%SurfaceFlux(:,:,:) ) )   
         ENDIF
 
