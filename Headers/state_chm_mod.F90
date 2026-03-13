@@ -2227,6 +2227,28 @@ CONTAINS
        ENDIF
     ENDIF
 
+#ifdef ADJOINT
+    ! Adjoint surface-flux integration requires SurfaceFlux regardless of
+    ! whether non-local PBL mixing (LTURB/LNLPBL) is enabled.
+    IF ( .NOT. ASSOCIATED( State_Chm%SurfaceFlux ) ) THEN
+       chmId = 'SurfaceFlux'
+       CALL Init_and_Register(                                               &
+            Input_Opt  = Input_Opt,                                          &
+            State_Chm  = State_Chm,                                          &
+            State_Grid = State_Grid,                                         &
+            chmId      = chmId,                                              &
+            Ptr2Data   = State_Chm%SurfaceFlux,                              &
+            nSlots     = State_Chm%nAdvect,                                  &
+            RC         = RC                                                 )
+
+       IF ( RC /= GC_SUCCESS ) THEN
+          errMsg = TRIM( errMsg_ir ) // TRIM( chmId )
+          CALL GC_Error( errMsg, RC, thisLoc )
+          RETURN
+       ENDIF
+    ENDIF
+#endif
+
     !------------------------------------------------------------------
     ! TLSTT (Linoz)
     !------------------------------------------------------------------

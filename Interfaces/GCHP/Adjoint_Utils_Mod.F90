@@ -461,9 +461,36 @@ SUBROUTINE  Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met)
  !   _ASSERT(RC==GC_SUCCESS, 'Error calling CONVERT_SPC_UNITS')
 
 
-     NFD=Input_Opt%NFD
+       NFD=Input_Opt%NFD
 
-     ! SurfaceFlux is dimensioned by nAdvect slots, but SurfaceFluxAdj is now
+       IF ( NFD < 1 .OR. NFD > State_Chm%nSpecies ) THEN
+          WRITE(*,*) 'ERROR in Integrate_Srf_Adjoint: invalid NFD=', NFD,      &
+                     ' valid range is 1..', State_Chm%nSpecies
+          STOP
+       ENDIF
+
+       IF ( .NOT. ASSOCIATED(State_Chm%SpeciesAdj) ) THEN
+          WRITE(*,*) 'ERROR in Integrate_Srf_Adjoint: SpeciesAdj is not allocated'
+          STOP
+       ENDIF
+
+       IF ( .NOT. ASSOCIATED(State_Chm%SurfaceFluxAdj) ) THEN
+          WRITE(*,*) 'ERROR in Integrate_Srf_Adjoint: SurfaceFluxAdj is not allocated'
+          STOP
+       ENDIF
+
+       IF ( .NOT. ASSOCIATED(State_Chm%SurfaceFlux) ) THEN
+          WRITE(*,*) 'ERROR in Integrate_Srf_Adjoint: SurfaceFlux is not allocated.'
+          WRITE(*,*) '       SurfaceFlux is allocated only when LTURB and LNLPBL are enabled.'
+          STOP
+       ENDIF
+
+       IF ( .NOT. ASSOCIATED(State_Met%AIRDEN) .OR. .NOT. ASSOCIATED(State_Met%BXHEIGHT) ) THEN
+          WRITE(*,*) 'ERROR in Integrate_Srf_Adjoint: required met fields AIRDEN/BXHEIGHT are not allocated'
+          STOP
+       ENDIF
+
+     ! SurfaceFlux is dimensioned by nAdvect slots, but SurfaceFluxAdj is 
      ! dimensioned by species ID (nSpecies). Map NFD -> advect slot for flux.
      NA = -1
      DO K = 1, State_Chm%nAdvect
@@ -478,6 +505,13 @@ SUBROUTINE  Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met)
               ' is not present in Map_Advect'
        STOP
      ENDIF
+
+       IF ( NFD > SIZE(State_Chm%SurfaceFluxAdj,3) .OR. NFD > SIZE(State_Chm%SpeciesAdj,4) ) THEN
+          WRITE(*,*) 'ERROR in Integrate_Srf_Adjoint: NFD exceeds array bounds. NFD=', NFD
+          WRITE(*,*) '       SIZE(SurfaceFluxAdj,3)=', SIZE(State_Chm%SurfaceFluxAdj,3), &
+                     ' SIZE(SpeciesAdj,4)=', SIZE(State_Chm%SpeciesAdj,4)
+          STOP
+       ENDIF
 
      surf_flux=>State_Chm%SurfaceFlux(:,:,NA)
     rho_dry=>State_Met%AIRDEN(:,:,1)
