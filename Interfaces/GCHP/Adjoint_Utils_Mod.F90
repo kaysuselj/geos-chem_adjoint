@@ -423,8 +423,11 @@ CONTAINS
                WRITE(*,*) '           LON=[', Input_Opt%FD_LON_MIN, ',', Input_Opt%FD_LON_MAX, ']'
                WRITE(*,*) '         LEVELS=[', L_START, ',', L_END, ']'
                WRITE(*,*) '         SUM(SpeciesAdj)=', SUM( State_Chm%SpeciesAdj(:,:,:,:) )
+<<<<<<< Updated upstream
                WRITE(*,*) 'Max,MIN(LONGITUDINAL) = ', MAXVAL(State_Grid%XMid), MINVAL(State_Grid%XMid)
                WRITE(*,*) 'Max,MIN(LATITUDINAL) = ', MAXVAL(State_Grid%YMid), MINVAL(State_Grid%YMid)
+=======
+>>>>>>> Stashed changes
 
             !ENDIF
         ELSE

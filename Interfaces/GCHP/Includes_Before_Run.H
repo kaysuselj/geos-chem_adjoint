@@ -210,28 +210,28 @@
           WRITE(*,*) ' Loading adjoint cost function mask'
       ! cost function mask
       State_Chm%CostFuncMask = CostFuncMask
-  ELSEIF (Input_Opt%CF_IMIN > 0 .and. Input_Opt%CF_JMIN > 0) THEN
-      IF (FIRST) THEN
-         if (MAPL_Am_I_Root()) &
-             WRITE(*,*) ' Cost function range supplied.'
-       WRITE(*,1027) Input_Opt%thisCPU,   &
-            Input_Opt%CF_IMIN, Input_Opt%CF_IMAX, &
-            Input_Opt%CF_JMIN, Input_Opt%CF_JMAX, &
-            Input_Opt%CF_LMIN, Input_Opt%CF_LMAX
-1027   FORMAT('CF on Pet ', i3, ' I = (', i3, ', ', i3, ') &
-             J = ( ', i3, ', ', i3, ') &
-             L = (', i3, ', ', i3, ')')
-
-
-         State_Chm%CostFuncMask = 0d0
-         DO L=Input_Opt%CF_LMIN,Input_Opt%CF_LMAX
-         DO J=Input_Opt%CF_JMIN,Input_opt%CF_JMAX
-            DO I=Input_opt%CF_IMIN, Input_Opt%CF_IMAX
-               State_Chm%CostFuncMask(I,J,L) = 1d0
-            ENDDO
-         ENDDO
-         ENDDO
-      ENDIF
+!  ELSEIF (Input_Opt%CF_IMIN > 0 .and. Input_Opt%CF_JMIN > 0) THEN
+!      IF (FIRST) THEN
+!         if (MAPL_Am_I_Root()) &
+!             WRITE(*,*) ' Cost function range supplied.'
+!       WRITE(*,1027) Input_Opt%thisCPU,   &
+!            Input_Opt%CF_IMIN, Input_Opt%CF_IMAX, &
+!            Input_Opt%CF_JMIN, Input_Opt%CF_JMAX, &
+!            Input_Opt%CF_LMIN, Input_Opt%CF_LMAX
+!1027   FORMAT('CF on Pet ', i3, ' I = (', i3, ', ', i3, ') &
+!             J = ( ', i3, ', ', i3, ') &
+!             L = (', i3, ', ', i3, ')')
+!
+!
+!         State_Chm%CostFuncMask = 0d0
+!         DO L=Input_Opt%CF_LMIN,Input_Opt%CF_LMAX
+!         DO J=Input_Opt%CF_JMIN,Input_opt%CF_JMAX
+!            DO I=Input_opt%CF_IMIN, Input_Opt%CF_IMAX
+!               State_Chm%CostFuncMask(I,J,L) = 1d0
+!            ENDDO
+!         ENDDO
+!         ENDDO
+!      ENDIF
   ENDIF
 
 #endif
