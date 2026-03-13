@@ -141,7 +141,7 @@ CONTAINS
     INTEGER :: I,J,L
     REAL*8 :: CFN,Scale_Factor
     CHARACTER(len=ESMF_MAXSTR) :: FD_SPEC,Msg
-    LOGICAL :: Is_Adj,Is_Root
+   LOGICAL :: Is_Adj,Is_Root,Has_FD_Mode
   
     
     NFD     = Input_Opt%NFD
@@ -150,12 +150,14 @@ CONTAINS
     LFD     = Input_Opt%LFD
     Is_Adj  = Input_Opt%IS_ADJOINT
     Is_Root  = Input_Opt%amIRoot
+      Has_FD_Mode = Input_Opt%IS_FD_SPOT .OR. Input_Opt%IS_FD_GLOBAL .OR.   &
+                           Input_Opt%IS_FD_LAYER .OR. Input_Opt%IS_FD_REGIONAL
   
     Scale_Factor = 1.0d0
     Msg          = 'Not perturbing'
 
     ! ===== GENERAL VALIDATION =====
-    IF ( NFD < 1 .OR. NFD > State_Chm%nSpecies ) THEN
+      IF ( Has_FD_Mode .AND. ( NFD < 1 .OR. NFD > State_Chm%nSpecies ) ) THEN
       WRITE(*,*) 'ERROR in Setup_Adjoint_ForwardPert: invalid NFD = ', NFD,      &
               ' valid range is 1..', State_Chm%nSpecies
        STOP
@@ -182,7 +184,7 @@ CONTAINS
        ENDIF
      ENDIF
     
-    IF (.NOT. Is_Adj) THEN
+   IF ( Has_FD_Mode .AND. .NOT. Is_Adj ) THEN
         SELECT CASE (Input_Opt%FD_STEP)
         CASE (0)
             ! No change
