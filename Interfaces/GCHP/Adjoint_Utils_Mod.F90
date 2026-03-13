@@ -150,7 +150,7 @@ CONTAINS
   
     ! local vars
    INTEGER :: IFD,JFD,LFD,NFD
-   INTEGER :: I,J,L,L_START,L_END
+   INTEGER :: I,J,L,L_START,L_END,N_FD_MODES
    REAL*8 :: CFN,Scale_Factor
    CHARACTER(len=ESMF_MAXSTR) :: FD_SPEC,Msg
    LOGICAL :: Is_Adj,Is_Root,Has_FD_Mode
@@ -165,6 +165,22 @@ CONTAINS
    ! IF not Had_FD_Mode, nothing needs to be changed
    Has_FD_Mode = Input_Opt%IS_FD_SPOT .OR. Input_Opt%IS_FD_GLOBAL .OR.   &
                            Input_Opt%IS_FD_LAYER .OR. Input_Opt%IS_FD_REGIONAL
+
+   N_FD_MODES = 0
+   IF ( Input_Opt%IS_FD_SPOT     ) N_FD_MODES = N_FD_MODES + 1
+   IF ( Input_Opt%IS_FD_GLOBAL   ) N_FD_MODES = N_FD_MODES + 1
+   IF ( Input_Opt%IS_FD_LAYER    ) N_FD_MODES = N_FD_MODES + 1
+   IF ( Input_Opt%IS_FD_REGIONAL ) N_FD_MODES = N_FD_MODES + 1
+
+   IF ( N_FD_MODES > 1 ) THEN
+      WRITE(*,*) 'ERROR in Setup_Adjoint_ForwardPert: multiple FD modes are active.'
+      WRITE(*,*) '   Exactly one of SPOT/GLOBAL/LAYER/REGIONAL must be TRUE.'
+      WRITE(*,*) '   SPOT=', Input_Opt%IS_FD_SPOT,                           &
+                 ' GLOBAL=', Input_Opt%IS_FD_GLOBAL,                         &
+                 ' LAYER=', Input_Opt%IS_FD_LAYER,                           &
+                 ' REGIONAL=', Input_Opt%IS_FD_REGIONAL
+      STOP
+   ENDIF
   
     Scale_Factor = 1.0d0
     Msg          = 'Not perturbing'
@@ -411,25 +427,18 @@ CONTAINS
                          State_Grid%XMid(I,J) >= Input_Opt%FD_LON_MIN .AND. &
                          State_Grid%XMid(I,J) <= Input_Opt%FD_LON_MAX) THEN
                         State_Chm%SpeciesAdj(I,J,L,NFD) = 1.0d0
-                        write (*,*) 'Setting adjoint to 1 at (I,J,L,NFD) = ', I, J, L, NFD
                      ENDIF
                   ENDDO
                ENDDO
             ENDDO
             
-            !IF (Is_Root) THEN
+            IF (Is_Root) THEN
                WRITE(*,*) ' Setting REGIONAL Adjoint Forcing to 1'
                WRITE(*,*) '   Region: LAT=[', Input_Opt%FD_LAT_MIN, ',', Input_Opt%FD_LAT_MAX, ']'
                WRITE(*,*) '           LON=[', Input_Opt%FD_LON_MIN, ',', Input_Opt%FD_LON_MAX, ']'
                WRITE(*,*) '         LEVELS=[', L_START, ',', L_END, ']'
-               WRITE(*,*) '         SUM(SpeciesAdj)=', SUM( State_Chm%SpeciesAdj(:,:,:,:) )
-<<<<<<< Updated upstream
-               WRITE(*,*) 'Max,MIN(LONGITUDINAL) = ', MAXVAL(State_Grid%XMid), MINVAL(State_Grid%XMid)
-               WRITE(*,*) 'Max,MIN(LATITUDINAL) = ', MAXVAL(State_Grid%YMid), MINVAL(State_Grid%YMid)
-=======
->>>>>>> Stashed changes
-
-            !ENDIF
+               WRITE(*,*) '         MAX(SpeciesAdj(:,:,:,NFD))=', MAXVAL( State_Chm%SpeciesAdj(:,:,:,NFD) )
+            ENDIF
         ELSE
             ! Forward: Apply Scale Factor to all grid cells within the region
             CALL WRITE_PARALLEL(TRIM(Msg)//' REGIONAL')
