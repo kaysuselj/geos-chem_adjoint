@@ -3411,7 +3411,7 @@ CONTAINS
 #endif
 #ifdef ADJOINT
     ! Finite difference test variables
-    INTEGER                        :: IFD, JFD, LFD
+    INTEGER                        :: FD_LAT, FD_LON, LFD
     REAL*8                         :: CFN
     CHARACTER(len=ESMF_MAXSTR)     :: FD_SPEC
 #endif
@@ -3477,31 +3477,31 @@ CONTAINS
     HcoState%EXPORT   => EXPORT
 #endif
 
-#ifdef ADJOINT
-    IF (Input_Opt%IS_FD_SPOT_THIS_PET .and. .not. Input_Opt%IS_FD_GLOBAL) THEN
-       FD_SPEC = transfer(state_chm%SpcData(Input_Opt%NFD)%Info%Name, FD_SPEC)
-       IFD = Input_Opt%IFD
-       JFD = Input_Opt%JFD
-       LFD = Input_Opt%LFD
-       NFD = Input_Opt%NFD
-       ! print out the cost function
-       WRITE(*,*) ' Computing final cost function'
-
-       CFN = 0d0
-       DO L = 1, State_Grid%NZ
-       DO J = 1, State_Grid%NY
-       DO I = 1, State_Grid%NX
-          if (State_Chm%CostFuncMask(I,J,L) > 0d0) THEN
+!#ifdef ADJOINT
+!    IF (Input_Opt%IS_FD_SPOT_THIS_PET .and. .not. Input_Opt%IS_FD_GLOBAL) THEN
+!       FD_SPEC = transfer(state_chm%SpcData(Input_Opt%NFD)%Info%Name, FD_SPEC)
+!       FD_LAT = Input_Opt%FD_LAT
+!       FD_LON = Input_Opt%FD_LON
+!       LFD = Input_Opt%LFD
+!       NFD = Input_Opt%NFD
+!       ! print out the cost function
+!       WRITE(*,*) ' Computing final cost function'
+!
+!       CFN = 0d0
+!       DO L = 1, State_Grid%NZ
+!       DO J = 1, State_Grid%NY
+!       DO I = 1, State_Grid%NX
+!         if (State_Chm%CostFuncMask(I,J,L) > 0d0) THEN
 !             WRITE (*, 1047) I, J, L, State_Chm%Species(NFD)%conc(I,J,L)
 !             CFN = CFN + State_Chm%Species(NFD)%Conc(I,J,L)
-          endif
-       ENDDO
-        ENDDO
-       ENDDO
-       WRITE(*,'(a7, e22.10)') ' CFN = ', CFN
-1047   FORMAT('  SPC(', i2, ', ', i2, ', ', i2, ') = ', e22.10)
-    ENDIF
-#endif
+!          endif
+!       ENDDO
+!        ENDDO
+!       ENDDO
+!       WRITE(*,'(a7, e22.10)') ' CFN = ', CFN
+!1047   FORMAT('  SPC(', i2, ', ', i2, ', ', i2, ') = ', e22.10)
+!    ENDIF
+!#endif
 
     ! Finalize HEMCO
     CALL HCOI_GC_FINAL( .FALSE., RC )
