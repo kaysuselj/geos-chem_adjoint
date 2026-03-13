@@ -411,18 +411,22 @@ CONTAINS
                          State_Grid%XMid(I,J) >= Input_Opt%FD_LON_MIN .AND. &
                          State_Grid%XMid(I,J) <= Input_Opt%FD_LON_MAX) THEN
                         State_Chm%SpeciesAdj(I,J,L,NFD) = 1.0d0
+                        write (*,*) 'Setting adjoint to 1 at (I,J,L,NFD) = ', I, J, L, NFD
                      ENDIF
                   ENDDO
                ENDDO
             ENDDO
             
-            IF (Is_Root) THEN
+            !IF (Is_Root) THEN
                WRITE(*,*) ' Setting REGIONAL Adjoint Forcing to 1'
                WRITE(*,*) '   Region: LAT=[', Input_Opt%FD_LAT_MIN, ',', Input_Opt%FD_LAT_MAX, ']'
                WRITE(*,*) '           LON=[', Input_Opt%FD_LON_MIN, ',', Input_Opt%FD_LON_MAX, ']'
                WRITE(*,*) '         LEVELS=[', L_START, ',', L_END, ']'
+               WRITE(*,*) '         SUM(SpeciesAdj)=', SUM( State_Chm%SpeciesAdj(:,:,:,:) )
+               WRITE(*,*) 'Max,MIN(LONGITUDINAL) = ', MAXVAL(State_Grid%XMid), MINVAL(State_Grid%XMid)
+               WRITE(*,*) 'Max,MIN(LATITUDINAL) = ', MAXVAL(State_Grid%YMid), MINVAL(State_Grid%YMid)
 
-            ENDIF
+            !ENDIF
         ELSE
             ! Forward: Apply Scale Factor to all grid cells within the region
             CALL WRITE_PARALLEL(TRIM(Msg)//' REGIONAL')
