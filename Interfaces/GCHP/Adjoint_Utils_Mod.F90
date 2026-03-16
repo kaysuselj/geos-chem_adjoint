@@ -583,8 +583,13 @@ SUBROUTINE  Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met)
     !          / (rho_dry [kg_dry/m3] * dz [m])
     !         = SpeciesAdj * [kg_spc/kg_dry]  =>  dimensionless (sensitivity to scale factor)
     
+        !State_Chm%SurfaceFluxAdj(:,:,NFD) =                                     &
+        !  State_Chm%SpeciesAdj(:,:,1,NFD) * ( surf_flux / ( rho_dry * dz ) )
+
+        !TO FIX - we do not need surface fluxes (and dt), remove this from the argument and do not compute them.
+        ! TO FIX -our SurfaceFlux adjoint represent now 1/dt*dJ/dEtot
         State_Chm%SurfaceFluxAdj(:,:,NFD) =                                     &
-          State_Chm%SpeciesAdj(:,:,1,NFD) * ( surf_flux / ( rho_dry * dz ) )
+          State_Chm%SpeciesAdj(:,:,1,NFD) *  / ( rho_dry * dz ) 
 
         IF ( Input_Opt%amIRoot ) THEN
            WRITE(*,*) 'Integrate_Srf_Adjoint: NFD=', NFD, ' NA=', NA,             &
