@@ -5088,7 +5088,7 @@ CONTAINS
 !BOC
   SUBROUTINE Compute_Sflx_For_Adjoint( Input_Opt,  State_Chm, State_Diag,   &
                                        State_Grid, State_Met, RC           )
-    USE ErrCode_Mod,          ONLY : GC_SUCCESS, GC_FAILURE
+   USE ErrCode_Mod,          ONLY : GC_SUCCESS, GC_FAILURE, GC_Error
     USE HCO_Utilities_GC_Mod, ONLY : GetHcoValEmis, InquireHco
     USE HCO_Utilities_GC_Mod, ONLY : LoadHcoValEmis
     USE Input_Opt_Mod,        ONLY : OptInput
@@ -5246,23 +5246,13 @@ CONTAINS
        ENDIF
 
     CASE ( 'TOTAL' )
-       DiagnName = 'ADJ_HEMCO_SFLX_' // TRIM( SpeciesName )
-       STATUS    = GC_SUCCESS
-       CALL Diagn_Create( HcoState  = HcoState,                             &
-                          cName     = TRIM( DiagnName ),                    &
-                          ExtNr     = -1,                                   &
-                          Cat       = -1,                                   &
-                          Hier      = -1,                                   &
-                          HcoID     = HcoID,                                &
-                          SpaceDim  = 3,                                    &
-                          OutUnit   = 'kg/m2/s',                            &
-                          AutoFill  = 1,                                    &
-                          OkIfExist = .TRUE.,                               &
-                          RC        = STATUS )
-       IF ( STATUS /= HCO_SUCCESS ) THEN
-          RC = GC_FAILURE
-          RETURN
-       ENDIF
+       ! TOTAL mode: return NULL and let Compute_Sflx_For_Adjoint fall through
+       ! to the LoadHcoValEmis/GetHcoValEmis path, which already sums the full
+       ! HEMCO emission flux for the species.  Creating an AutoFill diagnostic
+       ! here and immediately reading it fails because HEMCO only populates
+       ! AutoFill diagnostics during its own emission cycle, which has already
+       ! completed by the time this routine is called.
+       RETURN
 
     CASE ( 'FILTERED' )
        DiagnName = 'ADJ_HEMCO_SFLX_' // TRIM( SpeciesName )

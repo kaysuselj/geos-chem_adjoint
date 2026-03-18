@@ -473,7 +473,7 @@ END SUBROUTINE Setup_Adjoint_ForwardPert
   
   
 SUBROUTINE  Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met, &
-                          SurfaceFluxForward) 
+                          SurfaceFluxForward, dt) 
    USE UnitConv_Mod
    
     TYPE(OptInput),      INTENT(IN) :: Input_Opt      ! Input Options object
@@ -481,6 +481,7 @@ SUBROUTINE  Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met, &
     TYPE(GrdState),      INTENT(INOUT) :: State_Grid     ! Grid State object
     TYPE(MetState),      INTENT(INOUT) :: State_Met      ! Met State object
    REAL(fp),            INTENT(IN) :: SurfaceFluxForward(:,:)
+   REAL(fp),            INTENT(IN) :: dt                 ! Emission timestep [s]
 
 
 ! INTERNALS
@@ -554,19 +555,20 @@ SUBROUTINE  Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met, &
 
     ! Instantaneous surface-flux scaling-factor adjoint at current reverse step:
     !
-    ! Forward:  dConc = (SrfFlux_base * scale)  / (rho_dry * dz)
-    ! Adjoint:  dJ/d(scale) = SpeciesAdj(:,:,1) * SrfFlux_base / (rho_dry * dz)
+    ! Forward:  dConc = (SrfFlux_base * scale) * dt / (rho_dry * dz)
+    ! Adjoint:  dJ/d(scale) = SpeciesAdj(:,:,1) * SrfFlux_base * dt / (rho_dry * dz)
     !
-    ! Units:  SpeciesAdj [J / (kg_spc/kg_dry)] * surf_flux [kg_spc/m2/s]
+    ! Units:  SpeciesAdj [J / (kg_spc/kg_dry)] * surf_flux [kg_spc/m2/s] * dt [s]
     !          / (rho_dry [kg_dry/m3] * dz [m])
     !         = SpeciesAdj * [kg_spc/kg_dry]  =>  dimensionless (sensitivity to scale factor)
     
         State_Chm%SurfaceFluxAdj(:,:,NFD) =      State_Chm%SurfaceFluxAdj(:,:,NFD) +                                 &
                State_Chm%SpeciesAdj(:,:,1,NFD) *                                  &
-               ( SurfaceFluxForward / ( rho_dry * dz ) )
+               ( SurfaceFluxForward * dt / ( rho_dry * dz ) )
 
         IF ( Input_Opt%amIRoot ) THEN
                 WRITE(*,*) 'Integrate_Srf_Adjoint: NFD=', NFD,                    &
+                   ' dt=', dt,                                                     &
                    ' max|surf_flux|=', MAXVAL( ABS( SurfaceFluxForward ) ),        &
                    ' max|rho_dry|=', MAXVAL( ABS( rho_dry ) ),                &
                    ' max|dz|=', MAXVAL( ABS( dz ) ),                          &

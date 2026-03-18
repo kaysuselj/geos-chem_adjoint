@@ -861,6 +861,7 @@ CONTAINS
 #if defined (ADJOINT)
     ! Adjoint Finitie Difference Variables
     INTEGER                        :: I, J, L
+   INTEGER                        :: AdjSfluxNA
     CHARACTER(len=ESMF_MAXSTR)     :: TRACNAME
     TYPE(Species),       POINTER   :: ThisSpc
     ! State variables (i.e. concentrations before processes and at the end)
@@ -1860,7 +1861,8 @@ _ASSERT(RC==GC_SUCCESS, 'Error in Compute_Sflx_For_Adjoint (adjoint)')
    ENDDO
    _ASSERT(AdjSfluxNA > 0, 'Error mapping NFD to advect slot for Integrate_Srf_Adjoint')
    CALL Integrate_Srf_Adjoint( Input_Opt, State_Chm, State_Grid, State_Met, &
-                               State_Chm%SurfaceFlux(:,:,AdjSfluxNA) )
+                               State_Chm%SurfaceFlux(:,:,AdjSfluxNA),      &
+                               REAL( DT, fp ) )
      
 
 ENDIF ! IF (Is_Adjoint) THEN
