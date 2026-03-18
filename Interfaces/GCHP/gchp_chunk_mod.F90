@@ -155,9 +155,14 @@ CONTAINS
    REAL(fp)                       :: FD_LAT_COORD, FD_LON_COORD
     INTEGER                        :: FD_STEP
     CHARACTER(LEN=ESMF_MAXSTR)     :: FD_SPEC
+   CHARACTER(LEN=ESMF_MAXSTR)     :: AdjSfluxSelector
+   CHARACTER(LEN=ESMF_MAXSTR)     :: AdjSfluxDiagn
+   CHARACTER(LEN=ESMF_MAXSTR)     :: AdjSfluxExtName
     REAL(fp)                       :: d, dmin
     INTEGER                        :: imin, jmin, NFD, LFD
    INTEGER                        :: IFD, JFD
+   INTEGER                        :: AdjSfluxCat, AdjSfluxHier
+   INTEGER                        :: AdjSfluxNA
     CHARACTER(LEN=ESMF_MAXSTR)     :: FD_TYPE
 
    ! At present, we are unable to load cube-sphere files through ExtData
@@ -403,6 +408,42 @@ CONTAINS
        ENDIF
 
        Input_Opt%NFD = NFD
+
+        IF ( Input_Opt%IS_ADJOINT ) THEN
+         ! Read adjoint HEMCO surface-flux controls from GCHP.rc and store
+         ! them in Input_Opt for later use in the HEMCO interface.
+         !
+         ! ADJ_HEMCO_SFLUX_SELECTOR: NONE, DIAGN, TOTAL, FILTERED
+         ! ADJ_HEMCO_SFLUX_DIAGN:    diagnostic name used by DIAGN mode
+         ! ADJ_HEMCO_SFLUX_EXTNAME:  optional extension name for FILTERED
+         ! ADJ_HEMCO_SFLUX_CAT:      optional category for FILTERED
+         ! ADJ_HEMCO_SFLUX_HIER:     optional hierarchy for FILTERED
+         CALL ESMF_ConfigGetAttribute( CF, AdjSfluxSelector,                &
+            Label="ADJ_HEMCO_SFLUX_SELECTOR:", Default='NONE', RC=STATUS )
+         _VERIFY(STATUS)
+         CALL ESMF_ConfigGetAttribute( CF, AdjSfluxDiagn,                   &
+            Label="ADJ_HEMCO_SFLUX_DIAGN:", Default='', RC=STATUS )
+         _VERIFY(STATUS)
+         CALL ESMF_ConfigGetAttribute( CF, AdjSfluxExtName,                 &
+            Label="ADJ_HEMCO_SFLUX_EXTNAME:", Default='', RC=STATUS )
+         _VERIFY(STATUS)
+         CALL ESMF_ConfigGetAttribute( CF, AdjSfluxCat,                     &
+            Label="ADJ_HEMCO_SFLUX_CAT:", Default=-1, RC=STATUS )
+         _VERIFY(STATUS)
+         CALL ESMF_ConfigGetAttribute( CF, AdjSfluxHier,                    &
+            Label="ADJ_HEMCO_SFLUX_HIER:", Default=-1, RC=STATUS )
+         _VERIFY(STATUS)
+
+         Input_Opt%ADJ_HEMCO_SFLUX_SELECTOR = TRIM( To_UpperCase( ADJUSTL( AdjSfluxSelector ) ) )
+         Input_Opt%ADJ_HEMCO_SFLUX_DIAGN    = TRIM( ADJUSTL( AdjSfluxDiagn ) )
+         Input_Opt%ADJ_HEMCO_SFLUX_EXTNAME  = TRIM( ADJUSTL( AdjSfluxExtName ) )
+         Input_Opt%ADJ_HEMCO_SFLUX_CAT      = AdjSfluxCat
+         Input_Opt%ADJ_HEMCO_SFLUX_HIER     = AdjSfluxHier
+          ! Internal convenience boolean used by downstream routines.
+         Input_Opt%ADJ_HEMCO_SFLUX_ENABLED  =                                &
+            Input_Opt%ADJ_HEMCO_SFLUX_SELECTOR /= '' .AND.                 &
+            Input_Opt%ADJ_HEMCO_SFLUX_SELECTOR /= 'NONE'
+        ENDIF
 
        call ESMF_ConfigGetAttribute(CF, LFD, &
             Label="LFD:",default=0, RC=STATUS)
@@ -675,6 +716,9 @@ CONTAINS
     USE HCO_State_GC_Mod,   ONLY : HcoState, ExtState
     USE HCO_Interface_Common, ONLY : SetHcoTime
     USE HCO_Interface_GC_Mod, ONLY : Compute_Sflx_For_Vdiff
+#if defined( ADJOINT )
+   USE HCO_Interface_GC_Mod, ONLY : Compute_Sflx_For_Adjoint
+#endif
 
     ! Specialized subroutines
     USE Calc_Met_Mod,       ONLY : AirQnt
@@ -1102,13 +1146,15 @@ CONTAINS
 
 
 #if defined (ADJOINT)
-    if (.not. first) &
-         CALL Print_Global_Species_Kg( I_DBG, J_DBG, L_DBG,           &
-                                       'CO2', Input_Opt, State_Chm,   &
-                                       State_Grid, State_Met, trim(Iam) // &
-                                       ' before first unit conversion', RC)
-    CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
-         State_Grid, State_Met,State_Chm, trim(Iam) // ' before first unit conversion.', RC)
+    if ( Input_Opt%IS_ADJOINT ) then
+     if (.not. first) &
+        CALL Print_Global_Species_Kg( I_DBG, J_DBG, L_DBG,           &
+                          'CO2', Input_Opt, State_Chm,   &
+                          State_Grid, State_Met, trim(Iam) // &
+                          ' before first unit conversion', RC)
+     CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
+        State_Grid, State_Met,State_Chm, trim(Iam) // ' before first unit conversion.', RC)
+    endif
    
   !
   ! Setup adjoint state variable if adjoint calculation and perturbation if forward simulation
@@ -1118,21 +1164,21 @@ CONTAINS
 
    
 
-    if (Input_Opt%amIRoot) then
-        print *,'Kay, Adjoint variables at the start of gchp_chunk_mod.F90'
-        print *, 'first', first
-      print *, 'Input_Opt:IFD,JFD,LFD,NFD',Input_Opt%IFD,Input_Opt%JFD,Input_Opt%LFD,Input_Opt%NFD
-        print *, 'StateGrid:NX,NY,NZ',State_Grid%NX,State_Grid%NY,State_Grid%NZ
-        if ( Input_Opt%NFD >= 1 .and. Input_Opt%NFD <= State_Chm%nSpecies .and. &
-             Input_Opt%LFD >= 1 .and. Input_Opt%LFD <= State_Grid%NZ ) then
-           print *,'adjoint variable',                                          &
-                State_Chm%SpeciesAdj( MIN(I_DBG,State_Grid%NX),                 &
-                                      MIN(J_DBG,State_Grid%NY),                 &
-                                      Input_Opt%LFD, Input_Opt%NFD )
-        else
-           print *,'Skipping adjoint value print: invalid LFD/NFD'
-        endif
-    endif    
+    if (Input_Opt%amIRoot .and. Input_Opt%IS_ADJOINT) then
+       print *,'Kay, Adjoint variables at the start of gchp_chunk_mod.F90'
+       print *, 'first', first
+       print *, 'Input_Opt:IFD,JFD,LFD,NFD',Input_Opt%IFD,Input_Opt%JFD,Input_Opt%LFD,Input_Opt%NFD
+       print *, 'StateGrid:NX,NY,NZ',State_Grid%NX,State_Grid%NY,State_Grid%NZ
+       if ( Input_Opt%NFD >= 1 .and. Input_Opt%NFD <= State_Chm%nSpecies .and. &
+            Input_Opt%LFD >= 1 .and. Input_Opt%LFD <= State_Grid%NZ ) then
+          print *,'adjoint variable',                                          &
+               State_Chm%SpeciesAdj( MIN(I_DBG,State_Grid%NX),                 &
+                                     MIN(J_DBG,State_Grid%NY),                 &
+                                     Input_Opt%LFD, Input_Opt%NFD )
+       else
+          print *,'Skipping adjoint value print: invalid LFD/NFD'
+       endif
+    endif
 
 
 #endif
@@ -1674,10 +1720,12 @@ CONTAINS
 
 
 #if defined ( ADJOINT )
-  CALL Print_Global_Species_Kg( I_DBG, J_DBG, L_DBG,           &
-                                       'CO2', Input_Opt, State_Chm,   &
-                                       State_Grid, State_Met, trim(Iam) // &
-                                       'end of GCHP chunk', RC)
+   IF (Is_Adjoint) THEN
+       CALL Print_Global_Species_Kg( I_DBG, J_DBG, L_DBG,           &
+                                                               'CO2', Input_Opt, State_Chm,   &
+                                                               State_Grid, State_Met, trim(Iam) // &
+                                                               'end of GCHP chunk', RC)
+   ENDIF
 
 !
 ! ADJOINT RUN, RUN THE PROCESSES IN REVERSE
@@ -1787,8 +1835,9 @@ _ASSERT(RC==GC_SUCCESS, 'Error in EMISSIONS_RUN phase 2 (adjoint)')
 
 ! Get surface flux and save in State_Chm%Surface_Flux
 ! NEED TO MAKE SURE TO CLEANLY INCLUSE ONLY SURFACE EMISSIONS (NO DRY DEP) IN THIS FLUX !!
-CALL Compute_Sflx_For_Vdiff( Input_Opt,  State_Chm, State_Diag,    &
-                                       State_Grid, State_Met, RC            )
+CALL Compute_Sflx_For_Adjoint( Input_Opt, State_Chm, State_Diag,    &
+                               State_Grid, State_Met, RC            )
+_ASSERT(RC==GC_SUCCESS, 'Error in Compute_Sflx_For_Adjoint (adjoint)')
 
 
 !
@@ -1802,7 +1851,16 @@ CALL Compute_Sflx_For_Vdiff( Input_Opt,  State_Chm, State_Diag,    &
          State_Grid, State_Met,State_Chm, trim(Iam) // ' adjoint at the end.', RC)
 
 ! update surface flux adjoint
-   CALL Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met)
+   AdjSfluxNA = -1
+   DO N = 1, State_Chm%nAdvect
+      IF ( State_Chm%Map_Advect(N) == Input_Opt%NFD ) THEN
+         AdjSfluxNA = N
+         EXIT
+      ENDIF
+   ENDDO
+   _ASSERT(AdjSfluxNA > 0, 'Error mapping NFD to advect slot for Integrate_Srf_Adjoint')
+   CALL Integrate_Srf_Adjoint( Input_Opt, State_Chm, State_Grid, State_Met, &
+                               State_Chm%SurfaceFlux(:,:,AdjSfluxNA) )
      
 
 ENDIF ! IF (Is_Adjoint) THEN

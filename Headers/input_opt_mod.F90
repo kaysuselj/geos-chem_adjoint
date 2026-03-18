@@ -443,6 +443,26 @@ MODULE Input_Opt_Mod
 !    INTEGER                     :: CF_JMIN, CF_JMAX
 !    INTEGER                     :: CF_LMIN, CF_LMAX
     REAL(fp)                    :: FD_LAT_MIN, FD_LAT_MAX, FD_LON_MIN, FD_LON_MAX
+    ! Adjoint HEMCO surface-flux controls.
+    ! Values are read from GCHP.rc in GCHP_Chunk_Init using labels:
+    !   ADJ_HEMCO_SFLUX_SELECTOR:
+    !   ADJ_HEMCO_SFLUX_DIAGN:
+    !   ADJ_HEMCO_SFLUX_EXTNAME:
+    !   ADJ_HEMCO_SFLUX_CAT:
+    !   ADJ_HEMCO_SFLUX_HIER:
+    ! and are consumed by Compute_Sflx_For_Adjoint/Get_Adjoint_Hemco_SurfaceFlux.
+    LOGICAL                     :: ADJ_HEMCO_SFLUX_ENABLED
+    ! Internal convenience switch set true if selector is not NONE/blank.
+    CHARACTER(LEN=255)          :: ADJ_HEMCO_SFLUX_SELECTOR
+    ! Selector mode: NONE, DIAGN, TOTAL, or FILTERED.
+    CHARACTER(LEN=255)          :: ADJ_HEMCO_SFLUX_DIAGN
+    ! Diagnostic name used when selector is DIAGN.
+    CHARACTER(LEN=255)          :: ADJ_HEMCO_SFLUX_EXTNAME
+    ! Optional HEMCO extension name used by FILTERED mode.
+    INTEGER                     :: ADJ_HEMCO_SFLUX_CAT
+    ! Optional HEMCO category used by FILTERED mode.
+    INTEGER                     :: ADJ_HEMCO_SFLUX_HIER
+    ! Optional HEMCO hierarchy used by FILTERED mode.
 #endif
 
      !----------------------------------------
@@ -945,6 +965,14 @@ CONTAINS
     Input_Opt%FD_LAT_MAX                = -999.0_fp
     Input_Opt%FD_LON_MIN                = -999.0_fp
     Input_Opt%FD_LON_MAX                = -999.0_fp
+    ! Defaults for adjoint HEMCO surface-flux controls.
+    ! These are overwritten by GCHP.rc labels in GCHP_Chunk_Init when present.
+    Input_Opt%ADJ_HEMCO_SFLUX_ENABLED = .FALSE.
+    Input_Opt%ADJ_HEMCO_SFLUX_SELECTOR = 'NONE'
+    Input_Opt%ADJ_HEMCO_SFLUX_DIAGN    = ''
+    Input_Opt%ADJ_HEMCO_SFLUX_EXTNAME  = ''
+    Input_Opt%ADJ_HEMCO_SFLUX_CAT      = -1
+    Input_Opt%ADJ_HEMCO_SFLUX_HIER     = -1
 #endif
 
     !----------------------------------------

@@ -472,21 +472,22 @@ END SUBROUTINE Setup_Adjoint_ForwardPert
   
   
   
-SUBROUTINE  Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met) 
+SUBROUTINE  Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met, &
+                          SurfaceFluxForward) 
    USE UnitConv_Mod
    
     TYPE(OptInput),      INTENT(IN) :: Input_Opt      ! Input Options object
     TYPE(ChmState),      INTENT(INOUT) :: State_Chm      ! Chem State object
     TYPE(GrdState),      INTENT(INOUT) :: State_Grid     ! Grid State object
     TYPE(MetState),      INTENT(INOUT) :: State_Met      ! Met State object
+   REAL(fp),            INTENT(IN) :: SurfaceFluxForward(:,:)
 
 
 ! INTERNALS
     INTEGER                        :: previous_units
-   INTEGER :: NFD, NA, K, N
+   INTEGER :: NFD, N
     INTEGER    :: RC 
     
-    REAL(fp), POINTER :: surf_flux(:,:) => NULL()
     REAL(fp), POINTER :: rho_dry(:,:)   => NULL()
     REAL(fp), POINTER :: dz(:,:)        => NULL()
    REAL(fp) :: max_speciesadj_n, max_surfacefluxadj_n
@@ -520,32 +521,10 @@ SUBROUTINE  Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met)
           STOP
        ENDIF
 
-       IF ( .NOT. ASSOCIATED(State_Chm%SurfaceFlux) ) THEN
-          WRITE(*,*) 'ERROR in Integrate_Srf_Adjoint: SurfaceFlux is not allocated.'
-          WRITE(*,*) '       SurfaceFlux is allocated only when LTURB and LNLPBL are enabled.'
-          STOP
-       ENDIF
-
        IF ( .NOT. ASSOCIATED(State_Met%AIRDEN) .OR. .NOT. ASSOCIATED(State_Met%BXHEIGHT) ) THEN
           WRITE(*,*) 'ERROR in Integrate_Srf_Adjoint: required met fields AIRDEN/BXHEIGHT are not allocated'
           STOP
        ENDIF
-
-     ! SurfaceFlux is dimensioned by nAdvect slots, but SurfaceFluxAdj is 
-     ! dimensioned by species ID (nSpecies). Map NFD -> advect slot for flux.
-     NA = -1
-     DO K = 1, State_Chm%nAdvect
-       IF ( State_Chm%Map_Advect(K) == NFD ) THEN
-         NA = K
-         EXIT
-       ENDIF
-     ENDDO
-
-     IF ( NA < 1 ) THEN
-       WRITE(*,*) 'ERROR in Integrate_Srf_Adjoint: species NFD=', NFD,      &
-              ' is not present in Map_Advect'
-       STOP
-     ENDIF
 
        IF ( NFD > SIZE(State_Chm%SurfaceFluxAdj,3) .OR. NFD > SIZE(State_Chm%SpeciesAdj,4) ) THEN
           WRITE(*,*) 'ERROR in Integrate_Srf_Adjoint: NFD exceeds array bounds. NFD=', NFD
@@ -570,7 +549,6 @@ SUBROUTINE  Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met)
           ENDIF
        ENDDO
 
-     surf_flux=>State_Chm%SurfaceFlux(:,:,NA)
     rho_dry=>State_Met%AIRDEN(:,:,1)
     dz=>State_Met%BXHEIGHT(:,:,1)
 
@@ -583,17 +561,13 @@ SUBROUTINE  Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met)
     !          / (rho_dry [kg_dry/m3] * dz [m])
     !         = SpeciesAdj * [kg_spc/kg_dry]  =>  dimensionless (sensitivity to scale factor)
     
-        !State_Chm%SurfaceFluxAdj(:,:,NFD) =                                     &
-        !  State_Chm%SpeciesAdj(:,:,1,NFD) * ( surf_flux / ( rho_dry * dz ) )
-
-        !TO FIX - we do not need surface fluxes (and dt), remove this from the argument and do not compute them.
-        ! TO FIX -our SurfaceFlux adjoint represent now 1/dt*dJ/dEtot
-        State_Chm%SurfaceFluxAdj(:,:,NFD) =                                     &
-          State_Chm%SpeciesAdj(:,:,1,NFD)  / ( rho_dry * dz ) 
+        State_Chm%SurfaceFluxAdj(:,:,NFD) =      State_Chm%SurfaceFluxAdj(:,:,NFD) +                                 &
+               State_Chm%SpeciesAdj(:,:,1,NFD) *                                  &
+               ( SurfaceFluxForward / ( rho_dry * dz ) )
 
         IF ( Input_Opt%amIRoot ) THEN
-           WRITE(*,*) 'Integrate_Srf_Adjoint: NFD=', NFD, ' NA=', NA,             &
-             ' max|surf_flux|=', MAXVAL( ABS( surf_flux ) ),            &
+                WRITE(*,*) 'Integrate_Srf_Adjoint: NFD=', NFD,                    &
+                   ' max|surf_flux|=', MAXVAL( ABS( SurfaceFluxForward ) ),        &
                    ' max|rho_dry|=', MAXVAL( ABS( rho_dry ) ),                &
                    ' max|dz|=', MAXVAL( ABS( dz ) ),                          &
              ' max|SpeciesAdj(sfc)|=',                                   &
@@ -603,8 +577,7 @@ SUBROUTINE  Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met)
              ' max|SurfaceFluxAdj|=',                                    &
                MAXVAL( ABS( State_Chm%SurfaceFluxAdj(:,:,NFD) ) ),       &
                    ' max|SurfaceFluxAdj(global)|=',                            &
-                      MAXVAL( ABS( State_Chm%SurfaceFluxAdj(:,:,:) ) ),        &
-             'max|surf_flux_all|=', MAXVAL( ABS( State_Chm%SurfaceFlux(:,:,:) ) )   
+                                 MAXVAL( ABS( State_Chm%SurfaceFluxAdj(:,:,:) ) )
         ENDIF
 
       CALL Convert_Spc_Units(                                                  &
