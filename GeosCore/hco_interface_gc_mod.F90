@@ -4773,7 +4773,6 @@ CONTAINS
       !$OMP END PARALLEL DO
 
       ! Free pointers
-         AdjSurfaceFlux3D => NULL()
       ThisSpc => NULL()
     ENDDO   ! NA
 
@@ -5090,7 +5089,6 @@ CONTAINS
   SUBROUTINE Compute_Sflx_For_Adjoint( Input_Opt,  State_Chm, State_Diag,   &
                                        State_Grid, State_Met, RC           )
     USE ErrCode_Mod,          ONLY : GC_SUCCESS, GC_FAILURE
-    USE Error_Mod,            ONLY : GC_Error
     USE HCO_Utilities_GC_Mod, ONLY : GetHcoValEmis, InquireHco
     USE HCO_Utilities_GC_Mod, ONLY : LoadHcoValEmis
     USE Input_Opt_Mod,        ONLY : OptInput
