@@ -5151,6 +5151,18 @@ CONTAINS
 
     CALL InquireHco( NFD, Emis = EmisSpec )
 
+    IF ( Input_Opt%amIRoot ) THEN
+       WRITE(*,'(a,i4,a,l1,a,l1)') &
+          'Compute_Sflx_For_Adjoint: NFD=', NFD,        &
+          ' EmisSpec=', EmisSpec,                        &
+          ' HcoSpc%Emis associated=',                    &
+          ASSOCIATED( HcoState%Spc(NFD)%Emis%Val )
+       WRITE(*,'(a,i4,a,es12.4)') &
+          '  NA=', NA,                                   &
+          ' max|SurfaceFlux before|=',                   &
+          MAXVAL( ABS( State_Chm%SurfaceFlux(:,:,NA) ) )
+    ENDIF
+
     AdjSurfaceFlux3D => NULL()
     IF ( Input_Opt%ADJ_HEMCO_SFLUX_ENABLED ) THEN
        CALL Get_Adjoint_Hemco_SurfaceFlux( Input_Opt, State_Grid, NFD,      &
@@ -5180,6 +5192,12 @@ CONTAINS
           IF ( found ) State_Chm%SurfaceFlux(I,J,NA) = emis
        ENDDO
        ENDDO
+    ENDIF
+
+    IF ( Input_Opt%amIRoot ) THEN
+       WRITE(*,'(a,es12.4)') &
+          'Compute_Sflx_For_Adjoint: max|SurfaceFlux after|=', &
+          MAXVAL( ABS( State_Chm%SurfaceFlux(:,:,NA) ) )
     ENDIF
 
     ThisSpc => NULL()
