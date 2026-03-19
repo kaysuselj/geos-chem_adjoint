@@ -5113,7 +5113,7 @@ CONTAINS
     REAL(fp)                :: emis
     CHARACTER(LEN=255)      :: errMsg, thisLoc
     TYPE(Species), POINTER  :: ThisSpc
-    REAL(f4), POINTER       :: AdjSurfaceFlux3D(:,:,:) => NULL()
+   REAL(f4), POINTER       :: AdjSurfaceFlux2D(:,:) => NULL()
 
     thisLoc = 'Compute_Sflx_For_Adjoint ("hco_interface_gc_mod.f90")'
     RC      = GC_SUCCESS
@@ -5154,7 +5154,7 @@ CONTAINS
 
     CALL InquireHco( NFD, Emis = EmisSpec )
 
-    AdjSurfaceFlux3D => NULL()
+   AdjSurfaceFlux2D => NULL()
     IF ( Input_Opt%ADJ_HEMCO_SFLUX_ENABLED ) THEN
        ! Ensure diagnostics with AutoFill are current at this timestamp
        ! before attempting DIAGN/FILTERED adjoint flux retrieval.
@@ -5170,7 +5170,7 @@ CONTAINS
 
        CALL Get_Adjoint_Hemco_SurfaceFlux( Input_Opt, State_Grid, NFD,      &
                                            TRIM( ThisSpc%Name ),             &
-                                           AdjSurfaceFlux3D, RC )
+                                           AdjSurfaceFlux2D, RC )
        IF ( RC /= GC_SUCCESS ) THEN
           errMsg = 'Error retrieving adjoint-selected HEMCO surface flux'
           CALL GC_Error( errMsg, RC, thisLoc )
@@ -5179,12 +5179,10 @@ CONTAINS
        ENDIF
     ENDIF
 
-    IF ( ASSOCIATED( AdjSurfaceFlux3D ) ) THEN
+    IF ( ASSOCIATED( AdjSurfaceFlux2D ) ) THEN
        DO J = 1, State_Grid%NY
        DO I = 1, State_Grid%NX
-          IF ( SIZE( AdjSurfaceFlux3D, 3 ) >= 1 ) THEN
-             State_Chm%SurfaceFlux(I,J,NA) = REAL( AdjSurfaceFlux3D(I,J,1), fp )
-          ENDIF
+          State_Chm%SurfaceFlux(I,J,NA) = REAL( AdjSurfaceFlux2D(I,J), fp )
        ENDDO
        ENDDO
     ELSEIF ( EmisSpec ) THEN
@@ -5223,7 +5221,7 @@ CONTAINS
 !------------------------------------------------------------------------------
 !BOC
   SUBROUTINE Get_Adjoint_Hemco_SurfaceFlux( Input_Opt, State_Grid, HcoID,    &
-                                            SpeciesName, Ptr3D, RC )
+                                            SpeciesName, Ptr2D, RC )
     USE ErrCode_Mod,          ONLY : GC_SUCCESS, GC_FAILURE
     USE HCO_Diagn_Mod,        ONLY : Diagn_Create
     USE HCO_Error_Mod,        ONLY : HCO_SUCCESS
@@ -5237,13 +5235,13 @@ CONTAINS
     TYPE(GrdState),   INTENT(IN)    :: State_Grid
     INTEGER,          INTENT(IN)    :: HcoID
     CHARACTER(LEN=*), INTENT(IN)    :: SpeciesName
-    REAL(f4),         POINTER       :: Ptr3D(:,:,:)
+   REAL(f4),         POINTER       :: Ptr2D(:,:)
     INTEGER,          INTENT(INOUT) :: RC
 
-   INTEGER                    :: STATUS, ExtNr, Cat, Hier
+   INTEGER                   :: STATUS, ExtNr, Cat, Hier, DgnCol
     CHARACTER(LEN=255)         :: DiagnName
 
-    Ptr3D => NULL()
+   Ptr2D => NULL()
     RC    = GC_SUCCESS
 
     IF ( .NOT. Input_Opt%ADJ_HEMCO_SFLUX_ENABLED ) RETURN
@@ -5255,6 +5253,7 @@ CONTAINS
     SELECT CASE ( TRIM( Input_Opt%ADJ_HEMCO_SFLUX_SELECTOR ) )
     CASE ( 'DIAGN' )
        DiagnName = TRIM( Input_Opt%ADJ_HEMCO_SFLUX_DIAGN )
+       DgnCol    = HcoState%Diagn%HcoDiagnIDDefault
        IF ( DiagnName == '' ) THEN
           RC = GC_FAILURE
           RETURN
@@ -5271,6 +5270,7 @@ CONTAINS
 
     CASE ( 'FILTERED' )
        DiagnName = 'ADJ_HEMCO_SFLX_' // TRIM( SpeciesName )
+       DgnCol = HcoState%Diagn%HcoDiagnIDDefault
        ExtNr = -1
        Cat   = Input_Opt%ADJ_HEMCO_SFLUX_CAT
        Hier  = Input_Opt%ADJ_HEMCO_SFLUX_HIER
@@ -5296,8 +5296,9 @@ CONTAINS
                           Cat       = Cat,                                  &
                           Hier      = Hier,                                 &
                           HcoID     = HcoID,                                &
-                          SpaceDim  = 3,                                    &
+                          SpaceDim  = 2,                                    &
                           OutUnit   = 'kg/m2/s',                            &
+                          COL       = DgnCol,                               &
                           AutoFill  = 1,                                    &
                           OkIfExist = .TRUE.,                               &
                           RC        = STATUS )
@@ -5317,9 +5318,10 @@ CONTAINS
                           DiagnName       = TRIM( DiagnName ),              &
                           StopIfNotFound  = .TRUE.,                         &
                           RC              = STATUS,                         &
-                          Ptr3D           = Ptr3D )
+                          Ptr2D           = Ptr2D,                          &
+                          COL             = DgnCol )
     IF ( STATUS /= GC_SUCCESS ) THEN
-       Ptr3D => NULL()
+       Ptr2D => NULL()
        RC = GC_FAILURE
        RETURN
     ENDIF
