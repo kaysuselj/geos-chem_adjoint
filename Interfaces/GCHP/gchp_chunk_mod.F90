@@ -1851,7 +1851,8 @@ _ASSERT(RC==GC_SUCCESS, 'Error in Compute_Sflx_For_Adjoint (adjoint)')
      CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
          State_Grid, State_Met,State_Chm, trim(Iam) // ' adjoint at the end.', RC)
 
-! update surface flux adjoint
+! get the corresponding index from the mapping of NFD to advect slot
+! (State_Chm%SurfaceFlux is stored on advected species, and adjoint on the total number)
    AdjSfluxNA = -1
    DO N = 1, State_Chm%nAdvect
       IF ( State_Chm%Map_Advect(N) == Input_Opt%NFD ) THEN
@@ -1860,9 +1861,11 @@ _ASSERT(RC==GC_SUCCESS, 'Error in Compute_Sflx_For_Adjoint (adjoint)')
       ENDIF
    ENDDO
    _ASSERT(AdjSfluxNA > 0, 'Error mapping NFD to advect slot for Integrate_Srf_Adjoint')
+
+! Integrate surface adjoint flux
    CALL Integrate_Srf_Adjoint( Input_Opt, State_Chm, State_Grid, State_Met, &
                                State_Chm%SurfaceFlux(:,:,AdjSfluxNA),      &
-                               REAL( DT, fp ) )
+                                              REAL( Input_Opt%TS_DYN, fp ) )
      
 
 ENDIF ! IF (Is_Adjoint) THEN
