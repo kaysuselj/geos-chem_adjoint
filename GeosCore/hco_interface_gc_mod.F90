@@ -5241,7 +5241,6 @@ CONTAINS
     INTEGER,          INTENT(INOUT) :: RC
 
    INTEGER                    :: STATUS, ExtNr, Cat, Hier
-   INTEGER                    :: DgnCol, DgnAutoFill
     CHARACTER(LEN=255)         :: DiagnName
 
     Ptr3D => NULL()
@@ -5312,67 +5311,15 @@ CONTAINS
        RETURN
     END SELECT
 
-    ! Retrieve diagnostics robustly: avoid hard-failing on the first
-    ! timestamp miss and try likely collections/flags used by HEMCO.
-    Ptr3D => NULL()
-
-    IF ( TRIM( Input_Opt%ADJ_HEMCO_SFLUX_SELECTOR ) == 'FILTERED' ) THEN
-       DgnAutoFill = 1
-    ELSE
-       DgnAutoFill = -1
-    ENDIF
-
-    DgnCol = HcoState%Diagn%HcoDiagnIDDefault
     STATUS = GC_SUCCESS
     CALL HCO_GC_GetDiagn( Input_Opt       = Input_Opt,                      &
                           State_Grid      = State_Grid,                     &
                           DiagnName       = TRIM( DiagnName ),              &
-                          StopIfNotFound  = .FALSE.,                        &
+                          StopIfNotFound  = .TRUE.,                         &
                           RC              = STATUS,                         &
-                          Ptr3D           = Ptr3D,                          &
-                          COL             = DgnCol,                         &
-                          AutoFill        = DgnAutoFill )
-
-    IF ( .NOT. ASSOCIATED( Ptr3D ) ) THEN
-       DgnCol = HcoState%Diagn%HcoDiagnIDManual
-       STATUS = GC_SUCCESS
-       CALL HCO_GC_GetDiagn( Input_Opt       = Input_Opt,                   &
-                             State_Grid      = State_Grid,                  &
-                             DiagnName       = TRIM( DiagnName ),           &
-                             StopIfNotFound  = .FALSE.,                     &
-                             RC              = STATUS,                      &
-                             Ptr3D           = Ptr3D,                       &
-                             COL             = DgnCol,                      &
-                             AutoFill        = DgnAutoFill )
-    ENDIF
-
-    IF ( .NOT. ASSOCIATED( Ptr3D ) ) THEN
-       DgnCol = HcoState%Diagn%HcoDiagnIDAdjoint
-       STATUS = GC_SUCCESS
-       CALL HCO_GC_GetDiagn( Input_Opt       = Input_Opt,                   &
-                             State_Grid      = State_Grid,                  &
-                             DiagnName       = TRIM( DiagnName ),           &
-                             StopIfNotFound  = .FALSE.,                     &
-                             RC              = STATUS,                      &
-                             Ptr3D           = Ptr3D,                       &
-                             COL             = DgnCol,                      &
-                             AutoFill        = DgnAutoFill )
-    ENDIF
-
-    IF ( .NOT. ASSOCIATED( Ptr3D ) .AND. DgnAutoFill /= 1 ) THEN
-       DgnCol = HcoState%Diagn%HcoDiagnIDDefault
-       STATUS = GC_SUCCESS
-       CALL HCO_GC_GetDiagn( Input_Opt       = Input_Opt,                   &
-                             State_Grid      = State_Grid,                  &
-                             DiagnName       = TRIM( DiagnName ),           &
-                             StopIfNotFound  = .FALSE.,                     &
-                             RC              = STATUS,                      &
-                             Ptr3D           = Ptr3D,                       &
-                             COL             = DgnCol,                      &
-                             AutoFill        = 1 )
-    ENDIF
-
-    IF ( .NOT. ASSOCIATED( Ptr3D ) ) THEN
+                          Ptr3D           = Ptr3D )
+    IF ( STATUS /= GC_SUCCESS ) THEN
+       Ptr3D => NULL()
        RC = GC_FAILURE
        RETURN
     ENDIF

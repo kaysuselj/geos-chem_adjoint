@@ -1287,6 +1287,17 @@ CONTAINS
 #endif
 
     ! Initialize local variables
+    Ptr3D => NULL()
+
+    IF ( .NOT. ASSOCIATED( HcoState ) ) THEN
+      RC = HCO_FAIL
+      RETURN
+    ENDIF
+    IF ( .NOT. ASSOCIATED( ExtState ) ) THEN
+      RC = HCO_FAIL
+      RETURN
+    ENDIF
+
     iCOL = HcoState%Diagn%HcoDiagnIDManual
     IF ( PRESENT(COL) ) THEN
       iCOL = COL
@@ -1455,6 +1466,17 @@ CONTAINS
 #endif
 
     ! initialize local variables
+    Ptr2D => NULL()
+
+    IF ( .NOT. ASSOCIATED( HcoState ) ) THEN
+      RC = HCO_FAIL
+      RETURN
+    ENDIF
+    IF ( .NOT. ASSOCIATED( ExtState ) ) THEN
+      RC = HCO_FAIL
+      RETURN
+    ENDIF
+
     iCOL = HcoState%Diagn%HcoDiagnIDManual
     IF ( PRESENT(COL) ) THEN
       iCOL = COL
