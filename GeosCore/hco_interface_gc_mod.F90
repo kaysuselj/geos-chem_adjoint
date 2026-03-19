@@ -5089,6 +5089,9 @@ CONTAINS
   SUBROUTINE Compute_Sflx_For_Adjoint( Input_Opt,  State_Chm, State_Diag,   &
                                        State_Grid, State_Met, RC           )
    USE ErrCode_Mod,          ONLY : GC_SUCCESS, GC_FAILURE, GC_Error
+      USE HCO_Diagn_Mod,        ONLY : HcoDiagn_AutoUpdate
+      USE HCO_Error_Mod,        ONLY : HCO_SUCCESS
+      USE HCO_State_GC_Mod,     ONLY : HcoState
     USE HCO_Utilities_GC_Mod, ONLY : GetHcoValEmis, InquireHco
     USE HCO_Utilities_GC_Mod, ONLY : LoadHcoValEmis
     USE Input_Opt_Mod,        ONLY : OptInput
@@ -5106,7 +5109,7 @@ CONTAINS
     INTEGER,          INTENT(INOUT) :: RC
 
     LOGICAL                 :: EmisSpec, found
-    INTEGER                 :: I, J, N, NA, NFD
+   INTEGER                 :: I, J, N, NA, NFD, HMRC
     REAL(fp)                :: emis
     CHARACTER(LEN=255)      :: errMsg, thisLoc
     TYPE(Species), POINTER  :: ThisSpc
@@ -5153,6 +5156,18 @@ CONTAINS
 
     AdjSurfaceFlux3D => NULL()
     IF ( Input_Opt%ADJ_HEMCO_SFLUX_ENABLED ) THEN
+       ! Ensure diagnostics with AutoFill are current at this timestamp
+       ! before attempting DIAGN/FILTERED adjoint flux retrieval.
+       HMRC = HCO_SUCCESS
+       CALL HcoDiagn_AutoUpdate( HcoState, HMRC )
+       IF ( HMRC /= HCO_SUCCESS ) THEN
+          errMsg = 'Error updating HEMCO AutoFill diagnostics for adjoint flux retrieval'
+          RC = GC_FAILURE
+          CALL GC_Error( errMsg, RC, thisLoc )
+          ThisSpc => NULL()
+          RETURN
+       ENDIF
+
        CALL Get_Adjoint_Hemco_SurfaceFlux( Input_Opt, State_Grid, NFD,      &
                                            TRIM( ThisSpc%Name ),             &
                                            AdjSurfaceFlux3D, RC )
