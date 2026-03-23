@@ -2264,6 +2264,9 @@ CONTAINS
 #ifdef ADJOINT
     LOGICAL                      :: isStartTime
    LOGICAL                      :: ForceAdjointInitRun
+   REAL(ESMF_KIND_R8)           :: AdjLocalSum
+   REAL(ESMF_KIND_R8)           :: AdjGlobalSum
+   INTEGER                      :: AdjCO2_ID
     REAL(ESMF_KIND_r8), POINTER  :: CostFuncMask(:,:,:) => NULL()
 #endif
 
@@ -2603,6 +2606,21 @@ CONTAINS
                         print *,'Kay Species_ID',Int2Spc(3)%ID
                         print *,'Kay after refresh,1',State_Chm%Species(Int2Spc(3)%ID)%Conc(6,5,1)
                 endif
+
+                AdjCO2_ID = IND_('CO2')
+                AdjLocalSum = 0.0_ESMF_KIND_R8
+                IF ( AdjCO2_ID > 0 .AND. ASSOCIATED(State_Chm%SpeciesAdj) ) THEN
+                   AdjLocalSum = SUM( REAL( State_Chm%SpeciesAdj(:,:,:,AdjCO2_ID), ESMF_KIND_R8 ) )
+                ENDIF
+                call ESMF_VMGetCurrent(VM, RC=STATUS)
+                _VERIFY(STATUS)
+                call ESMF_VMAllReduce(VM, sendData=AdjLocalSum, recvData=AdjGlobalSum, &
+                                      reduceflag=ESMF_REDUCE_SUM, rc=STATUS)
+                _VERIFY(STATUS)
+                IF ( am_I_Root ) THEN
+                   WRITE(*,*) 'ADJ_CO2_SUM [after_refresh] phase=', Phase,         &
+                              ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+                ENDIF
 
 
              ELSE
@@ -2978,6 +2996,25 @@ CONTAINS
                         print *,'Kay before chunk run',State_Chm%Species(3)%Conc(6,5,1)
                 endif
 
+#ifdef ADJOINT
+            IF ( Input_Opt%IS_ADJOINT ) THEN
+               AdjCO2_ID = IND_('CO2')
+               AdjLocalSum = 0.0_ESMF_KIND_R8
+               IF ( AdjCO2_ID > 0 .AND. ASSOCIATED(State_Chm%SpeciesAdj) ) THEN
+                  AdjLocalSum = SUM( REAL( State_Chm%SpeciesAdj(:,:,:,AdjCO2_ID), ESMF_KIND_R8 ) )
+               ENDIF
+               call ESMF_VMGetCurrent(VM, RC=STATUS)
+               _VERIFY(STATUS)
+               call ESMF_VMAllReduce(VM, sendData=AdjLocalSum, recvData=AdjGlobalSum, &
+                                     reduceflag=ESMF_REDUCE_SUM, rc=STATUS)
+               _VERIFY(STATUS)
+               IF ( am_I_Root ) THEN
+                  WRITE(*,*) 'ADJ_CO2_SUM [before_chunk] phase=', Phase,          &
+                             ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+               ENDIF
+            ENDIF
+#endif
+
 
              ! Run the GEOS-Chem column chemistry code for the given phase
              CALL GCHP_Chunk_Run( GC         = GC,         & ! Grid comp ref.
@@ -3009,6 +3046,25 @@ CONTAINS
                                   __RC__                  )  ! Success or fail?
 
              CALL MAPL_TimerOff(STATE, "DO_CHEM")
+
+#ifdef ADJOINT
+             IF ( Input_Opt%IS_ADJOINT ) THEN
+                AdjCO2_ID = IND_('CO2')
+                AdjLocalSum = 0.0_ESMF_KIND_R8
+                IF ( AdjCO2_ID > 0 .AND. ASSOCIATED(State_Chm%SpeciesAdj) ) THEN
+                   AdjLocalSum = SUM( REAL( State_Chm%SpeciesAdj(:,:,:,AdjCO2_ID), ESMF_KIND_R8 ) )
+                ENDIF
+                call ESMF_VMGetCurrent(VM, RC=STATUS)
+                _VERIFY(STATUS)
+                call ESMF_VMAllReduce(VM, sendData=AdjLocalSum, recvData=AdjGlobalSum, &
+                                      reduceflag=ESMF_REDUCE_SUM, rc=STATUS)
+                _VERIFY(STATUS)
+                IF ( am_I_Root ) THEN
+                   WRITE(*,*) 'ADJ_CO2_SUM [after_chunk] phase=', Phase,           &
+                              ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+                ENDIF
+             ENDIF
+#endif
 
 #if !defined( MODEL_GEOS )
              ! Optional memory prints (level >= 2)
@@ -3112,6 +3168,21 @@ CONTAINS
              IF ( Int2Adj(I)%ID <= 0 ) CYCLE
              Int2Adj(I)%Internal = State_Chm%SpeciesAdj(:,:,:,Int2Adj(I)%ID)
           ENDDO
+
+          AdjCO2_ID = IND_('CO2')
+          AdjLocalSum = 0.0_ESMF_KIND_R8
+          IF ( AdjCO2_ID > 0 .AND. ASSOCIATED(State_Chm%SpeciesAdj) ) THEN
+             AdjLocalSum = SUM( REAL( State_Chm%SpeciesAdj(:,:,:,AdjCO2_ID), ESMF_KIND_R8 ) )
+          ENDIF
+          call ESMF_VMGetCurrent(VM, RC=STATUS)
+          _VERIFY(STATUS)
+          call ESMF_VMAllReduce(VM, sendData=AdjLocalSum, recvData=AdjGlobalSum, &
+                                reduceflag=ESMF_REDUCE_SUM, rc=STATUS)
+          _VERIFY(STATUS)
+          IF ( am_I_Root ) THEN
+             WRITE(*,*) 'ADJ_CO2_SUM [after_afterrun] phase=', Phase,            &
+                        ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+          ENDIF
        ENDIF
 #endif
        CALL MAPL_TimerOff(STATE, "CP_AFTR")

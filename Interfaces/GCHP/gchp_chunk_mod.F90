@@ -1823,22 +1823,24 @@ CONTAINS
 ! Get Emission fluxes from HEMCO and store in HcoState
 ! MIGHT NEED TO GET THE STATE PRIOR TO EMISSIONS_RUN
 
-! Adjoint: unconditionally populate HcoState with emission fluxes
-HCO_PHASE = 1
-CALL EMISSIONS_RUN( Input_Opt, State_Chm, State_Diag, &
-                    State_Grid, State_Met, .TRUE., HCO_PHASE, RC )
-_ASSERT(RC==GC_SUCCESS, 'Error in EMISSIONS_RUN phase 1 (adjoint)')
-HCO_PHASE = 2
-CALL EMISSIONS_RUN( Input_Opt, State_Chm, State_Diag, &
-                    State_Grid, State_Met, .TRUE., HCO_PHASE, RC )
-_ASSERT(RC==GC_SUCCESS, 'Error in EMISSIONS_RUN phase 2 (adjoint)')
+! Run surface-flux adjoint only when emissions were active in forward.
+IF ( DoEmis ) THEN
+   HCO_PHASE = 1
+   CALL EMISSIONS_RUN( Input_Opt, State_Chm, State_Diag, &
+                       State_Grid, State_Met, .TRUE., HCO_PHASE, RC )
+   _ASSERT(RC==GC_SUCCESS, 'Error in EMISSIONS_RUN phase 1 (adjoint)')
+   HCO_PHASE = 2
+   CALL EMISSIONS_RUN( Input_Opt, State_Chm, State_Diag, &
+                       State_Grid, State_Met, .TRUE., HCO_PHASE, RC )
+   _ASSERT(RC==GC_SUCCESS, 'Error in EMISSIONS_RUN phase 2 (adjoint)')
 
 
-! Get surface flux and save in State_Chm%Surface_Flux
-! NEED TO MAKE SURE TO CLEANLY INCLUSE ONLY SURFACE EMISSIONS (NO DRY DEP) IN THIS FLUX !!
-CALL Compute_Sflx_For_Adjoint( Input_Opt, State_Chm, State_Diag,    &
-                               State_Grid, State_Met, RC            )
-_ASSERT(RC==GC_SUCCESS, 'Error in Compute_Sflx_For_Adjoint (adjoint)')
+   ! Get surface flux and save in State_Chm%Surface_Flux
+   ! NEED TO MAKE SURE TO CLEANLY INCLUSE ONLY SURFACE EMISSIONS (NO DRY DEP) IN THIS FLUX !!
+   CALL Compute_Sflx_For_Adjoint( Input_Opt, State_Chm, State_Diag,    &
+                                  State_Grid, State_Met, RC            )
+   _ASSERT(RC==GC_SUCCESS, 'Error in Compute_Sflx_For_Adjoint (adjoint)')
+ENDIF
 
 
 !
@@ -1851,39 +1853,47 @@ _ASSERT(RC==GC_SUCCESS, 'Error in Compute_Sflx_For_Adjoint (adjoint)')
      CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
          State_Grid, State_Met,State_Chm, trim(Iam) // ' adjoint at the end.', RC)
 
-! get the corresponding index from the mapping of NFD to advect slot
-! (State_Chm%SurfaceFlux is stored on advected species, and adjoint on the total number)
-   AdjSfluxNA = -1
-   DO N = 1, State_Chm%nAdvect
-      IF ( State_Chm%Map_Advect(N) == Input_Opt%NFD ) THEN
-         AdjSfluxNA = N
-         EXIT
-      ENDIF
-   ENDDO
-   _ASSERT(AdjSfluxNA > 0, 'Error mapping NFD to advect slot for Integrate_Srf_Adjoint')
+   IF ( DoEmis ) THEN
+      ! get the corresponding index from the mapping of NFD to advect slot
+      ! (State_Chm%SurfaceFlux is stored on advected species, and adjoint on the total number)
+      AdjSfluxNA = -1
+      DO N = 1, State_Chm%nAdvect
+         IF ( State_Chm%Map_Advect(N) == Input_Opt%NFD ) THEN
+            AdjSfluxNA = N
+            EXIT
+         ENDIF
+      ENDDO
+      _ASSERT(AdjSfluxNA > 0, 'Error mapping NFD to advect slot for Integrate_Srf_Adjoint')
 
-! Integrate surface adjoint flux
-   CALL Integrate_Srf_Adjoint( Input_Opt, State_Chm, State_Grid, State_Met, &
-                               State_Chm%SurfaceFlux(:,:,AdjSfluxNA),      &
-                                              REAL( Input_Opt%TS_DYN, fp ) )
+      ! Integrate surface adjoint flux using dynamic timestep.
+      CALL Integrate_Srf_Adjoint( Input_Opt, State_Chm, State_Grid, State_Met, &
+                                  State_Chm%SurfaceFlux(:,:,AdjSfluxNA),      &
+                      REAL( Input_Opt%TS_DYN, fp )                )
+   ENDIF
 
 ! Reverse of AIRQNT mixing-ratio update:
 !   Conc_new = Conc_old * DP_DRY_PREV / DELP_DRY
 ! so adjoints map as:
 !   SpeciesAdj_old += SpeciesAdj_new * DP_DRY_PREV / DELP_DRY
-   DO N = 1, State_Chm%nSpecies
-      DO L = 1, State_Grid%NZ
-         DO J = 1, State_Grid%NY
-            DO I = 1, State_Grid%NX
-               IF ( State_Met%DELP_DRY(I,J,L) > 0.0_fp ) THEN
-                  State_Chm%SpeciesAdj(I,J,L,N) =                              &
-                       State_Chm%SpeciesAdj(I,J,L,N) *                         &
-                       State_Met%DP_DRY_PREV(I,J,L) / State_Met%DELP_DRY(I,J,L)
-               ENDIF
+
+   ! Match forward AIRQNT behavior: only reverse-scale adjoints when
+   ! forward mixing-ratio scaling was applied on this step.
+   IF ( scaleMR ) THEN
+      DO N = 1, State_Chm%nSpecies
+         DO L = 1, State_Grid%NZ
+            DO J = 1, State_Grid%NY
+               DO I = 1, State_Grid%NX
+                  IF ( State_Met%DELP_DRY(I,J,L) > 0.0_fp ) THEN
+                     State_Chm%SpeciesAdj(I,J,L,N) =                           &
+                          State_Chm%SpeciesAdj(I,J,L,N) *                      &
+                          State_Met%DP_DRY_PREV(I,J,L) / State_Met%DELP_DRY(I,J,L)
+                  ENDIF
+               ENDDO
             ENDDO
          ENDDO
       ENDDO
-   ENDDO
+   ENDIF
+
      
 
 ENDIF ! IF (Is_Adjoint) THEN
