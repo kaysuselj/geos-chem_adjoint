@@ -2607,6 +2607,14 @@ CONTAINS
                         print *,'Kay after refresh,1',State_Chm%Species(Int2Spc(3)%ID)%Conc(6,5,1)
                 endif
 
+                ! Keep SpeciesAdj synchronized with refreshed internal adjoint
+                ! state before any diagnostics or further pre-run logic.
+                DO I = 1, SIZE(Int2Adj,1)
+                   IF ( Int2Adj(I)%ID <= 0 ) CYCLE
+                   State_Chm%SpeciesAdj(:,:,:,Int2Adj(I)%ID) = Int2Adj(I)%Internal
+                ENDDO
+                State_Chm%SpeciesAdj = State_Chm%SpeciesAdj(:,:,State_Grid%NZ:1:-1,:)
+
                 AdjCO2_ID = IND_('CO2')
                 AdjLocalSum = 0.0_ESMF_KIND_R8
                 IF ( AdjCO2_ID > 0 .AND. ASSOCIATED(State_Chm%SpeciesAdj) ) THEN
