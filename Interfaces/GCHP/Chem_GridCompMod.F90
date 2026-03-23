@@ -2266,8 +2266,6 @@ CONTAINS
    LOGICAL                      :: ForceAdjointInitRun
    REAL(ESMF_KIND_R8)           :: AdjLocalSum
    REAL(ESMF_KIND_R8)           :: AdjGlobalSum
-   REAL(ESMF_KIND_R8)           :: AdjLocalSumBuf(1)
-   REAL(ESMF_KIND_R8)           :: AdjGlobalSumBuf(1)
    INTEGER                      :: AdjCO2_ID
     REAL(ESMF_KIND_r8), POINTER  :: CostFuncMask(:,:,:) => NULL()
 #endif
@@ -2616,11 +2614,9 @@ CONTAINS
                 ENDIF
                 call ESMF_VMGetCurrent(VM, RC=STATUS)
                 _VERIFY(STATUS)
-                AdjLocalSumBuf(1) = AdjLocalSum
-                call ESMF_VMAllReduce(VM, sendData=AdjLocalSumBuf, recvData=AdjGlobalSumBuf, &
-                                      reduceflag=ESMF_REDUCE_SUM, rc=STATUS)
+                call MAPL_CommsAllReduceSum(VM, sendbuf=AdjLocalSum, recvbuf=AdjGlobalSum, &
+                                            cnt=1, RC=STATUS)
                 _VERIFY(STATUS)
-                AdjGlobalSum = AdjGlobalSumBuf(1)
                 IF ( am_I_Root ) THEN
                    WRITE(*,*) 'ADJ_CO2_SUM [after_refresh] phase=', Phase,         &
                               ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
@@ -3009,11 +3005,9 @@ CONTAINS
                ENDIF
                call ESMF_VMGetCurrent(VM, RC=STATUS)
                _VERIFY(STATUS)
-               AdjLocalSumBuf(1) = AdjLocalSum
-               call ESMF_VMAllReduce(VM, sendData=AdjLocalSumBuf, recvData=AdjGlobalSumBuf, &
-                                     reduceflag=ESMF_REDUCE_SUM, rc=STATUS)
+               call MAPL_CommsAllReduceSum(VM, sendbuf=AdjLocalSum, recvbuf=AdjGlobalSum, &
+                                           cnt=1, RC=STATUS)
                _VERIFY(STATUS)
-               AdjGlobalSum = AdjGlobalSumBuf(1)
                IF ( am_I_Root ) THEN
                   WRITE(*,*) 'ADJ_CO2_SUM [before_chunk] phase=', Phase,          &
                              ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
@@ -3062,11 +3056,9 @@ CONTAINS
                 ENDIF
                 call ESMF_VMGetCurrent(VM, RC=STATUS)
                 _VERIFY(STATUS)
-                AdjLocalSumBuf(1) = AdjLocalSum
-                call ESMF_VMAllReduce(VM, sendData=AdjLocalSumBuf, recvData=AdjGlobalSumBuf, &
-                                      reduceflag=ESMF_REDUCE_SUM, rc=STATUS)
+                call MAPL_CommsAllReduceSum(VM, sendbuf=AdjLocalSum, recvbuf=AdjGlobalSum, &
+                                            cnt=1, RC=STATUS)
                 _VERIFY(STATUS)
-                AdjGlobalSum = AdjGlobalSumBuf(1)
                 IF ( am_I_Root ) THEN
                    WRITE(*,*) 'ADJ_CO2_SUM [after_chunk] phase=', Phase,           &
                               ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
@@ -3184,11 +3176,9 @@ CONTAINS
           ENDIF
           call ESMF_VMGetCurrent(VM, RC=STATUS)
           _VERIFY(STATUS)
-          AdjLocalSumBuf(1) = AdjLocalSum
-          call ESMF_VMAllReduce(VM, sendData=AdjLocalSumBuf, recvData=AdjGlobalSumBuf, &
-                                reduceflag=ESMF_REDUCE_SUM, rc=STATUS)
+          call MAPL_CommsAllReduceSum(VM, sendbuf=AdjLocalSum, recvbuf=AdjGlobalSum, &
+                                      cnt=1, RC=STATUS)
           _VERIFY(STATUS)
-          AdjGlobalSum = AdjGlobalSumBuf(1)
           IF ( am_I_Root ) THEN
              WRITE(*,*) 'ADJ_CO2_SUM [after_afterrun] phase=', Phase,            &
                         ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
