@@ -1866,6 +1866,24 @@ _ASSERT(RC==GC_SUCCESS, 'Error in Compute_Sflx_For_Adjoint (adjoint)')
    CALL Integrate_Srf_Adjoint( Input_Opt, State_Chm, State_Grid, State_Met, &
                                State_Chm%SurfaceFlux(:,:,AdjSfluxNA),      &
                                               REAL( Input_Opt%TS_DYN, fp ) )
+
+! Reverse of AIRQNT mixing-ratio update:
+!   Conc_new = Conc_old * DP_DRY_PREV / DELP_DRY
+! so adjoints map as:
+!   SpeciesAdj_old += SpeciesAdj_new * DP_DRY_PREV / DELP_DRY
+   DO N = 1, State_Chm%nSpecies
+      DO L = 1, State_Grid%NZ
+         DO J = 1, State_Grid%NY
+            DO I = 1, State_Grid%NX
+               IF ( State_Met%DELP_DRY(I,J,L) > 0.0_fp ) THEN
+                  State_Chm%SpeciesAdj(I,J,L,N) =                              &
+                       State_Chm%SpeciesAdj(I,J,L,N) *                         &
+                       State_Met%DP_DRY_PREV(I,J,L) / State_Met%DELP_DRY(I,J,L)
+               ENDIF
+            ENDDO
+         ENDDO
+      ENDDO
+   ENDDO
      
 
 ENDIF ! IF (Is_Adjoint) THEN
