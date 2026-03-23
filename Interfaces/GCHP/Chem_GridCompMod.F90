@@ -2263,6 +2263,7 @@ CONTAINS
     CHARACTER(len=ESMF_MAXSTR)   :: timestring1, timestring2
 #ifdef ADJOINT
     LOGICAL                      :: isStartTime
+   LOGICAL                      :: ForceAdjointInitRun
     REAL(ESMF_KIND_r8), POINTER  :: CostFuncMask(:,:,:) => NULL()
 #endif
 
@@ -2378,9 +2379,22 @@ CONTAINS
 
 #ifdef ADJOINT
     if (Input_Opt%is_adjoint .and. first) THEN
-       ! the forward model doesn't actually trigger on the final
-       ! timestep, so we should skip the first one
-       IsRunTime = .false.
+       ! In transport-only adjoint runs, no GEOS-Chem operator may ever
+       ! trigger GCHP_Chunk_Run, so force one first entry to seed the
+       ! adjoint state. Otherwise preserve the existing first-step skip.
+       ForceAdjointInitRun = .NOT. ( Input_Opt%LCONV .OR. Input_Opt%LTURB .OR. &
+                                     Input_Opt%LWETD .OR. Input_Opt%LCHEM .OR. &
+                                     Input_Opt%LDRYD )
+       IF ( ForceAdjointInitRun ) THEN
+          IsRunTime = .TRUE.
+          IF ( am_I_Root ) THEN
+             WRITE(*,*) '  Forcing first GCC call for adjoint initialization in transport-only mode'
+          ENDIF
+       ELSE
+          ! The forward model doesn't actually trigger on the final
+          ! timestep, so we should skip the first one.
+          IsRunTime = .FALSE.
+       ENDIF
     end if
 #endif
     ! Is it time to update tendencies?
