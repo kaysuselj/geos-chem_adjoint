@@ -2657,8 +2657,38 @@ CONTAINS
             State_Chm%SpeciesAdj(:,:,:,Int2Adj(I)%ID) = Int2Adj(I)%Internal
          ENDDO
 
+         AdjCO2_ID = IND_('CO2')
+         AdjLocalSum = 0.0_ESMF_KIND_R8
+         IF ( AdjCO2_ID > 0 .AND. ASSOCIATED(State_Chm%SpeciesAdj) ) THEN
+            AdjLocalSum = SUM( REAL( State_Chm%SpeciesAdj(:,:,:,AdjCO2_ID), ESMF_KIND_R8 ) )
+         ENDIF
+         call ESMF_VMGetCurrent(VM, RC=STATUS)
+         _VERIFY(STATUS)
+         call MAPL_CommsAllReduceSum(VM, sendbuf=AdjLocalSum, recvbuf=AdjGlobalSum, &
+                                     cnt=1, RC=STATUS)
+         _VERIFY(STATUS)
+         IF ( am_I_Root ) THEN
+            WRITE(*,*) 'ADJ_CO2_SUM [after_int2adj_copy] phase=', Phase,        &
+                       ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+         ENDIF
+
          ! Flip in the vertical
          State_Chm%SpeciesAdj = State_Chm%SpeciesAdj( :, :, State_Grid%NZ:1:-1, : )
+
+         AdjCO2_ID = IND_('CO2')
+         AdjLocalSum = 0.0_ESMF_KIND_R8
+         IF ( AdjCO2_ID > 0 .AND. ASSOCIATED(State_Chm%SpeciesAdj) ) THEN
+            AdjLocalSum = SUM( REAL( State_Chm%SpeciesAdj(:,:,:,AdjCO2_ID), ESMF_KIND_R8 ) )
+         ENDIF
+         call ESMF_VMGetCurrent(VM, RC=STATUS)
+         _VERIFY(STATUS)
+         call MAPL_CommsAllReduceSum(VM, sendbuf=AdjLocalSum, recvbuf=AdjGlobalSum, &
+                                     cnt=1, RC=STATUS)
+         _VERIFY(STATUS)
+         IF ( am_I_Root ) THEN
+            WRITE(*,*) 'ADJ_CO2_SUM [after_int2adj_flip] phase=', Phase,        &
+                       ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+         ENDIF
       ENDIF
 #endif
 
