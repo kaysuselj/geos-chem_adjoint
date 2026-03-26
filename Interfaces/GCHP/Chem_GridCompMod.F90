@@ -2464,6 +2464,32 @@ CONTAINS
 
        CALL MAPL_TimerOn(STATE, "RUN"  )
 
+#ifdef ADJOINT
+       ! Diagnostic: read Int2Adj%Internal directly before any refresh/copy,
+       ! to see whether the between-call drop happens before or after Adjoint_StateRefresh.
+       IF ( Input_Opt%IS_ADJOINT .AND. ASSOCIATED(Int2Adj) ) THEN
+          AdjCO2_ID   = IND_('CO2')
+          AdjLocalSum = 0.0_ESMF_KIND_R8
+          IF ( AdjCO2_ID > 0 ) THEN
+             DO I = 1, SIZE(Int2Adj,1)
+                IF ( Int2Adj(I)%ID == AdjCO2_ID .AND. ASSOCIATED(Int2Adj(I)%Internal) ) THEN
+                   AdjLocalSum = SUM( REAL( Int2Adj(I)%Internal(:,:,:), ESMF_KIND_R8 ) )
+                   EXIT
+                ENDIF
+             ENDDO
+          ENDIF
+          call ESMF_VMGetCurrent(VM, RC=STATUS)
+          _VERIFY(STATUS)
+          call MAPL_CommsAllReduceSum(VM, sendbuf=AdjLocalSum, recvbuf=AdjGlobalSum, &
+                                      cnt=1, RC=STATUS)
+          _VERIFY(STATUS)
+          IF ( am_I_Root ) THEN
+             WRITE(*,*) 'ADJ_CO2_SUM [at_entry_int2adj] phase=', Phase,        &
+                        ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+          ENDIF
+       ENDIF
+#endif
+
        ! Get various parameters from the ESMF/MAPL framework
        CALL Extract_( GC,                   &  ! Ref to this Gridded Component
                       Clock,                &  ! ESMF Clock object
@@ -4263,6 +4289,7 @@ CONTAINS
      type (ESMF_State)                           :: INTERNAL
      integer                                     :: hdr
      integer                                     :: unit
+   logical                                     :: fileExists
 
      character(len=ESMF_MAXSTR)                  :: FNAME, datestamp
 
@@ -4292,6 +4319,13 @@ CONTAINS
 
      FNAME = 'gcadj_import_checkpoint.' // trim(datestamp) // '.nc4'
 
+     INQUIRE(FILE=TRIM(FNAME), EXIST=fileExists)
+     IF ( .NOT. fileExists ) THEN
+        WRITE(*,*) TRIM(Iam)//': Missing adjoint checkpoint file: ', TRIM(FNAME)
+        STATUS = GC_FAILURE
+        _VERIFY(STATUS)
+     ENDIF
+
 
      call MAPL_ESMFStateReadFromFile(IMPORT, CLOCK, &
           FNAME, &
@@ -4305,6 +4339,13 @@ CONTAINS
      _VERIFY(STATUS)
 
      FNAME = 'gcadj_internal_checkpoint.' // trim(datestamp) // '.nc4'
+
+     INQUIRE(FILE=TRIM(FNAME), EXIST=fileExists)
+     IF ( .NOT. fileExists ) THEN
+        WRITE(*,*) TRIM(Iam)//': Missing adjoint checkpoint file: ', TRIM(FNAME)
+        STATUS = GC_FAILURE
+        _VERIFY(STATUS)
+     ENDIF
 
      call MAPL_ESMFStateReadFromFile(INTERNAL, CLOCK, &
           FNAME, &
