@@ -1113,6 +1113,9 @@ CONTAINS
          previous_units = previous_units,                                    &
          RC             = RC                                                )
     _ASSERT(RC==GC_SUCCESS, 'Error calling CONVERT_SPC_UNITS')
+    if (Input_Opt%AmIRoot .and. NCALLS < 10) then
+       write(*,*) ' previous_units = ', previous_units
+    endif
 
     !=======================================================================
     ! Always prescribe H2O in both the stratosphere and troposhere in GEOS.
