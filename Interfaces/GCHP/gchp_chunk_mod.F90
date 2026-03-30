@@ -1162,8 +1162,12 @@ CONTAINS
    
   !
   ! Setup adjoint state variable if adjoint calculation and perturbation if forward simulation
-   !  --- see possible options in Adjoint_Utils_Mod.F90:Setup_Adjoint_ForwardPert ---
-  !
+  !  --- see possible options in Adjoint_Utils_Mod.F90:Setup_Adjoint_ForwardPert ---
+  ! 
+  ! ADJOINT RUN - Adjoint Concentrations in SpeciesConc are in mass CO2(x,y,z,t) per mass CO2(X_i,Y_i,Z_i,T_i) 
+  !  ({X,Y,Z,T}_i is the location at the prescribed location/time)
+  !  formally we call units KG_PER_KG_DRY
+  ! 
    IF (first) &  CALL Setup_Adjoint_ForwardPert(State_Chm,State_Grid,Input_Opt)
 
    
@@ -1879,23 +1883,27 @@ ENDIF
 ! so adjoints map as:
 !   SpeciesAdj_old += SpeciesAdj_new * DP_DRY_PREV / DELP_DRY
 
+   !!!!!
+   ! WE NEED TO DO THE MASS-CONSERVATION HERE !!!!!!
+   !!!! 
+   
    ! Match forward AIRQNT behavior: only reverse-scale adjoints when
    ! forward mixing-ratio scaling was applied on this step.
-   IF ( scaleMR ) THEN
-      DO N = 1, State_Chm%nSpecies
-         DO L = 1, State_Grid%NZ
-            DO J = 1, State_Grid%NY
-               DO I = 1, State_Grid%NX
-                  IF ( State_Met%DELP_DRY(I,J,L) > 0.0_fp ) THEN
-                     State_Chm%SpeciesAdj(I,J,L,N) =                           &
-                          State_Chm%SpeciesAdj(I,J,L,N) *                      &
-                          State_Met%DP_DRY_PREV(I,J,L) / State_Met%DELP_DRY(I,J,L)
-                  ENDIF
-               ENDDO
-            ENDDO
-         ENDDO
-      ENDDO
-   ENDIF
+   !IF ( scaleMR ) THEN
+   !   DO N = 1, State_Chm%nSpecies
+   !      DO L = 1, State_Grid%NZ
+   !         DO J = 1, State_Grid%NY
+   !            DO I = 1, State_Grid%NX
+   !               IF ( State_Met%DELP_DRY(I,J,L) > 0.0_fp ) THEN
+   !                  State_Chm%SpeciesAdj(I,J,L,N) =                           &
+   !                       State_Chm%SpeciesAdj(I,J,L,N) *                      &
+   !                       State_Met%DP_DRY_PREV(I,J,L) / State_Met%DELP_DRY(I,J,L)
+   !               ENDIF
+   !            ENDDO
+    !        ENDDO
+   !      ENDDO
+   !  ENDDO
+   !ENDIF
 
      
 
@@ -1976,6 +1984,9 @@ ENDIF ! IF (Is_Adjoint) THEN
     CALL MAPL_TimerOff( STATE, 'GC_DIAGN' )
     if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Diagnostics done!'
 
+
+    ! Adjoint Concentration will be multiplied with M_air/M_CO2 
+    !
     !=======================================================================
     ! Convert State_Chm%Species units
     !=======================================================================

@@ -1016,6 +1016,17 @@ CONTAINS
 #   include "GCHPchem_ExportSpec___.h"
 #endif
 
+   ! Dedicated export for AdvCore density scaling (independent of HISTORY.rc)
+   CALL MAPL_AddExportSpec(GC,                                    &
+       SHORT_NAME = 'ADV_AIRDEN',                                &
+       LONG_NAME  = 'dry_air_density_for_advection',             &
+       UNITS      = 'kg m-3',                                    &
+       PRECISION  = ESMF_KIND_R8,                                &
+       DIMS       = MAPL_DimsHorzVert,                           &
+       VLOCATION  = MAPL_VLocationCenter,                        &
+       RC=STATUS )
+   _VERIFY(STATUS)
+
     ! Read HISTORY config file and add exports for unique items
     CALL ESMF_ConfigGetAttribute( myState%myCF, HistoryConfigFile, &
                                   Label="HISTORY_CONFIG:",         &
@@ -3412,6 +3423,15 @@ CONTAINS
        ENDIF
     ENDDO
 #endif
+
+   ! Populate dedicated AdvCore density export
+   CALL MAPL_GetPointer( EXPORT, Ptr3d_R8, 'ADV_AIRDEN', &
+             notFoundOK=.TRUE., __RC__ )
+   IF (ASSOCIATED(Ptr3d_R8) .AND. ASSOCIATED(State_Met%AIRDEN)) THEN
+      Ptr3d_R8(:,:,State_Grid%NZ:1:-1) =  &
+            State_Met%AIRDEN(:,:,1:State_Grid%NZ)
+   ENDIF
+   Ptr3d_R8 => NULL()
 
     !=======================================================================
     ! All done
