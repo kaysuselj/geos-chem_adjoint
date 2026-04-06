@@ -1872,10 +1872,11 @@ ENDIF
       ENDDO
       _ASSERT(AdjSfluxNA > 0, 'Error mapping NFD to advect slot for Integrate_Srf_Adjoint')
 
-      ! Integrate surface adjoint flux using dynamic timestep.
+      ! Because we guard this with IF(DoEmis) which is true for a chemistry time step
+      ! the Integrate_Srf_Adjoint call will be every chemistry time step therefore dt = Input_Opt%TS_CHEM
       CALL Integrate_Srf_Adjoint( Input_Opt, State_Chm, State_Grid, State_Met, &
                                   State_Chm%SurfaceFlux(:,:,AdjSfluxNA),      &
-                      REAL( Input_Opt%TS_DYN, fp )                )
+                      REAL( Input_Opt%TS_CHEM, fp )                )
    ENDIF
 
 ! Reverse of AIRQNT mixing-ratio update:

@@ -2279,6 +2279,7 @@ CONTAINS
    REAL(ESMF_KIND_R8)           :: AdjGlobalSum
    INTEGER                      :: AdjCO2_ID
     REAL(ESMF_KIND_r8), POINTER  :: CostFuncMask(:,:,:) => NULL()
+    INTEGER(ESMF_KIND_I8)        :: adj_elapsed_s  ! Elapsed sim seconds for adjoint alarm check
 #endif
 
     __Iam__('Run_')
@@ -2316,6 +2317,38 @@ CONTAINS
     ! ----------------------------------------------------------------------
     CALL MAPL_Get(STATE, RUNALARM=ALARM, __RC__)
     IsChemTime = ESMF_AlarmIsRinging(ALARM, __RC__)
+
+#ifdef ADJOINT
+    ! ESMF alarms do not ring on a reversed clock. In adjoint mode, manually
+    ! determine IsChemTime by checking whether the elapsed time from the
+    ! simulation start is a multiple of TS_CHEM, replicating the forward-run
+    ! alarm schedule at the same absolute times.
+    IF ( Input_Opt%IS_ADJOINT ) THEN
+
+       ! Validate TS_CHEM is an integer multiple of TS_DYN
+       IF ( MOD( Input_Opt%TS_CHEM, Input_Opt%TS_DYN ) /= 0 ) THEN
+          IF ( am_I_Root ) WRITE(*,*) 'ERROR: TS_CHEM must be a multiple of ' // &
+               'TS_DYN in adjoint mode. TS_CHEM=', Input_Opt%TS_CHEM,            &
+               ' TS_DYN=', Input_Opt%TS_DYN
+          STATUS = GC_FAILURE
+          _VERIFY(STATUS)
+       ENDIF
+
+       ! Get current clock position and stop time (= forward sim start = T_start)
+       CALL ESMF_ClockGet( CLOCK, currTime=currTime, stopTime=stopTime, __RC__ )
+
+       ! Elapsed time from forward sim start to current adjoint clock position:
+       !   elapsed = currTime - stopTime = (T_end - k*TS_DYN) - T_start
+       tsChemInt = currTime - stopTime
+       CALL ESMF_TimeIntervalGet( tsChemInt, s_i8=adj_elapsed_s, __RC__ )
+
+       ! Ring at the same absolute times as the forward run
+       IsChemTime = ( MOD( adj_elapsed_s,                          &
+                           INT( Input_Opt%TS_CHEM, ESMF_KIND_I8 ) &
+                         ) == 0_ESMF_KIND_I8 )
+
+    ENDIF
+#endif
 
     ! if (am_I_Root) WRITE(*,*) ' Chem clock is reverse? ', ESMF_ClockIsReverse(CLOCK)
     ! Turn off alarm: only if it was on and this is phase 2 (don't turn off
