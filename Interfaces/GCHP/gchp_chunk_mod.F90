@@ -273,8 +273,12 @@ CONTAINS
    !    - FD_TYPE='SPOT' - perturb a single grid cell (defined by IFD/JFD/LFD or nearest lat/lon point)
     !    - FD_TYPE='LAYER' - perturb all grid cells in a given layer (defined by LFD)
     ! - FD_STEP defines the perturbation magnitude:
-    !    - FD_STEP=1  - increase initial concentration by 10% 
+    !    - FD_STEP=1  - increase initial concentration by 10%
     !    - FD_STEP=2  - decrease initial concentration by 10%
+    !    - FD_STEP=3  - increase initial concentration by 5%
+    !    - FD_STEP=4  - decrease initial concentration by 5%
+    !    - FD_STEP=6  - increase initial concentration by 1%
+    !    - FD_STEP=7  - decrease initial concentration by 1%
     !
     ! ADJOINT SIMULATION:
     ! - FD_TYPE defines the initial adjoint variable:

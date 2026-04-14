@@ -109,6 +109,8 @@ CONTAINS
       !      = 2 : perturbation of -10%
       !      = 3 : perturbation of +5%
       !      = 4 : perturbation of -5%
+      !      = 6 : perturbation of +1%
+      !      = 7 : perturbation of -1%
       !
     ! FD_TYPE OPTIONS:
     ! =====================================================================
@@ -229,6 +231,12 @@ CONTAINS
         CASE (4)
             Scale_Factor = 0.95d0
             Msg = 'Perturbing -0.05'
+        CASE (6)
+            Scale_Factor = 1.01d0
+            Msg = 'Perturbing +0.01'
+        CASE (7)
+            Scale_Factor = 0.99d0
+            Msg = 'Perturbing -0.01'
         CASE DEFAULT
             WRITE(*,*) ' FD_STEP = ', Input_Opt%FD_STEP, ' NOT SUPPORTED!'
         END SELECT
