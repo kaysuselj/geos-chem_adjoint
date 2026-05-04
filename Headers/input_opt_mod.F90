@@ -443,6 +443,7 @@ MODULE Input_Opt_Mod
 !    INTEGER                     :: CF_JMIN, CF_JMAX
 !    INTEGER                     :: CF_LMIN, CF_LMAX
     REAL(fp)                    :: FD_LAT_MIN, FD_LAT_MAX, FD_LON_MIN, FD_LON_MAX
+    REAL(fp)                    :: Adjoint_Val
     ! Adjoint HEMCO surface-flux controls.
     ! Values are read from GCHP.rc in GCHP_Chunk_Init using labels:
     !   ADJ_HEMCO_SFLUX_SELECTOR:
@@ -965,6 +966,7 @@ CONTAINS
     Input_Opt%FD_LAT_MAX                = -999.0_fp
     Input_Opt%FD_LON_MIN                = -999.0_fp
     Input_Opt%FD_LON_MAX                = -999.0_fp
+    Input_Opt%Adjoint_Val               = 1.0_fp
     ! Defaults for adjoint HEMCO surface-flux controls.
     ! These are overwritten by GCHP.rc labels in GCHP_Chunk_Init when present.
     Input_Opt%ADJ_HEMCO_SFLUX_ENABLED = .FALSE.

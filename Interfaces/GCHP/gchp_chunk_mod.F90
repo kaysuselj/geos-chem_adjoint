@@ -316,9 +316,13 @@ CONTAINS
     IF (Input_Opt%IS_FD_REGIONAL) call WRITE_PARALLEL('FD_TYPE: REGIONAL')
 
 
-    ! If we run forward by default no perturbation of 
+    ! If we run forward by default no perturbation of
     call ESMF_ConfigGetAttribute(CF, FD_STEP, &
          Label="FD_STEP:" , Default=0, RC=STATUS)
+    _VERIFY(STATUS)
+
+    call ESMF_ConfigGetAttribute(CF, Input_Opt%Adjoint_Val, &
+         Label="ADJOINT_VAL:", Default=1.0d0, RC=STATUS)
     _VERIFY(STATUS)
 
     IF (Input_Opt%IS_FD_GLOBAL .or. Input_Opt%IS_FD_SPOT)  THEN

@@ -262,7 +262,7 @@ CONTAINS
           
        IF (Is_Adj) THEN    
            State_Chm%SpeciesAdj(:,:,:,:) = 0.d0
-            State_Chm%SpeciesAdj(IFD,JFD,LFD,NFD)=1.0d0
+            State_Chm%SpeciesAdj(IFD,JFD,LFD,NFD) = Input_Opt%Adjoint_Val
            IF (Is_Root) & 
             WRITE(*,*) ' Setting Single Forcing to 1 (ifd,jfd,lfd,nfd)',IFD,JFD,LFD,NFD
        ELSE
@@ -294,7 +294,7 @@ CONTAINS
 
        IF (Is_Adj) THEN    
            State_Chm%SpeciesAdj(:,:,:,:)   = 0.d0
-           State_Chm%SpeciesAdj(:,:,:,NFD) = 1.0d0
+           State_Chm%SpeciesAdj(:,:,:,NFD) = Input_Opt%Adjoint_Val
            IF (Is_Root) WRITE(*,*) ' Setting Global Adjoint Forcing to 1'
        ELSE
        
@@ -332,7 +332,7 @@ CONTAINS
 
         IF (Is_Adj) THEN
             State_Chm%SpeciesAdj(:,:,:,:)     = 0.d0
-            State_Chm%SpeciesAdj(:,:,LFD,NFD) = 1.0d0
+            State_Chm%SpeciesAdj(:,:,LFD,NFD) = Input_Opt%Adjoint_Val
             IF (Is_Root) WRITE(*,*) ' Setting Layer ', LFD, ' Adjoint Forcing to 1'
         ELSE
             ! Forward: Apply Scale Factor to specific LAYER slice
@@ -434,7 +434,7 @@ CONTAINS
                          State_Grid%YMid(I,J) <= Input_Opt%FD_LAT_MAX .AND. &
                          State_Grid%XMid(I,J) >= Input_Opt%FD_LON_MIN .AND. &
                          State_Grid%XMid(I,J) <= Input_Opt%FD_LON_MAX) THEN
-                        State_Chm%SpeciesAdj(I,J,L,NFD) = 1.0d0
+                        State_Chm%SpeciesAdj(I,J,L,NFD) = Input_Opt%Adjoint_Val
                      ENDIF
                   ENDDO
                ENDDO
