@@ -11,11 +11,12 @@ MODULE Adjoint_Utils_Mod
 #include "MAPL_Generic.h"
   USE MAPL_MOD
   USE ESMF
-  USE Precision_Mod       
-  USE State_Chm_Mod,   ONLY: ChmState 
+  USE Precision_Mod
+  USE State_Chm_Mod,   ONLY: ChmState
   USE Input_Opt_Mod,   ONLY : OptInput
   USE State_Grid_Mod,  ONLY : GrdState
   USE State_Met_Mod,   ONLY : MetState
+  USE netcdf
 
   IMPLICIT NONE
   PRIVATE
@@ -631,7 +632,7 @@ END SUBROUTINE Integrate_Srf_Adjoint
     ! Local variables
     CHARACTER(LEN=512)      :: fname
     TYPE(ESMF_VM)           :: vm
-    INTEGER                 :: comm, STATUS
+    INTEGER                 :: STATUS
     INTEGER                 :: ncid, varid, dimid, nf_rc
     INTEGER                 :: nlat, nlon, nlev
     INTEGER                 :: start4(4), count4(4)
@@ -651,10 +652,8 @@ END SUBROUTINE Integrate_Srf_Adjoint
     WRITE(fname,'(A,"/CO2_adjoint_forcing_",I4.4,I2.2,I2.2,"_",I2.2,I2.2,"z.nc4")') &
          TRIM(Input_Opt%OCO2_FORCING_DIR), year, month, day, hour, minute
 
-    ! Get ESMF VM and MPI communicator
+    ! Get ESMF VM for broadcast
     CALL ESMF_VMGetCurrent(vm, RC=STATUS)
-    IF (STATUS /= ESMF_SUCCESS) THEN; RC = STATUS; RETURN; ENDIF
-    CALL ESMF_VMGet(vm, MPICOMMUNICATOR=comm, RC=STATUS)
     IF (STATUS /= ESMF_SUCCESS) THEN; RC = STATUS; RETURN; ENDIF
 
     ! Rank 0 checks for the file and reads grid dimensions
@@ -664,17 +663,17 @@ END SUBROUTINE Integrate_Srf_Adjoint
     IF (MAPL_AM_I_ROOT(vm)) THEN
        INQUIRE(FILE=TRIM(fname), EXIST=file_exists)
        IF (file_exists) THEN
-          nf_rc = NF_OPEN(TRIM(fname), NF_NOWRITE, ncid)
-          IF (nf_rc == NF_NOERR) THEN
+          nf_rc = nf90_open(TRIM(fname), NF90_NOWRITE, ncid)
+          IF (nf_rc == NF90_NOERR) THEN
              file_flag = 1
-             nf_rc = NF_INQ_DIMID(ncid, 'lat', dimid)
-             nf_rc = NF_INQ_DIMLEN(ncid, dimid, nlat)
-             nf_rc = NF_INQ_DIMID(ncid, 'lon', dimid)
-             nf_rc = NF_INQ_DIMLEN(ncid, dimid, nlon)
-             nf_rc = NF_INQ_DIMID(ncid, 'lev', dimid)
-             nf_rc = NF_INQ_DIMLEN(ncid, dimid, nlev)
+             nf_rc = nf90_inq_dimid(ncid, 'lat', dimid)
+             nf_rc = nf90_inquire_dimension(ncid, dimid, len=nlat)
+             nf_rc = nf90_inq_dimid(ncid, 'lon', dimid)
+             nf_rc = nf90_inquire_dimension(ncid, dimid, len=nlon)
+             nf_rc = nf90_inq_dimid(ncid, 'lev', dimid)
+             nf_rc = nf90_inquire_dimension(ncid, dimid, len=nlev)
           ELSE
-             WRITE(*,'(A,I0,1X,A)') 'Load_OCO2_Adjoint_Forcing: NF_OPEN error ', &
+             WRITE(*,'(A,I0,1X,A)') 'Load_OCO2_Adjoint_Forcing: nf90_open error ', &
                   nf_rc, TRIM(fname)
           ENDIF
        ELSE
@@ -702,19 +701,19 @@ END SUBROUTINE Integrate_Srf_Adjoint
     ! Root reads forcing variable: netCDF dims are (time,lev,lat,lon) in C order
     ! → Fortran column-major order reverses to (nlon, nlat, nlev, ntime)
     IF (MAPL_AM_I_ROOT(vm)) THEN
-       nf_rc = NF_INQ_VARID(ncid, 'forcing', varid)
+       nf_rc = nf90_inq_varid(ncid, 'forcing', varid)
        start4 = (/1, 1, 1, 1/)
        count4 = (/nlon, nlat, nlev, 1/)
-       nf_rc = NF_GET_VARA_REAL(ncid, varid, start4, count4, forcing_ll)
-       IF (nf_rc /= NF_NOERR) &
-            WRITE(*,'(A,I0)') 'Load_OCO2_Adjoint_Forcing: NF_GET_VARA_REAL error ', nf_rc
-       nf_rc = NF_CLOSE(ncid)
+       nf_rc = nf90_get_var(ncid, varid, forcing_ll, start=start4, count=count4)
+       IF (nf_rc /= NF90_NOERR) &
+            WRITE(*,'(A,I0)') 'Load_OCO2_Adjoint_Forcing: nf90_get_var error ', nf_rc
+       nf_rc = nf90_close(ncid)
     ENDIF
 
-    ! Broadcast forcing array from rank 0 to all ranks
-    CALL MPI_Bcast(forcing_ll, nlon*nlat*nlev, MPI_REAL, 0, comm, STATUS)
-    IF (STATUS /= 0) THEN
-       DEALLOCATE(forcing_ll); RC = ESMF_FAILURE; RETURN
+    ! Broadcast forcing array from rank 0 to all ranks via MAPL wrapper
+    CALL MAPL_CommsBcast(vm, forcing_ll, nlon*nlat*nlev, 0, RC=STATUS)
+    IF (STATUS /= ESMF_SUCCESS) THEN
+       DEALLOCATE(forcing_ll); RC = STATUS; RETURN
     ENDIF
 
     ! Bilinear interpolation from regular lat/lon to cubed-sphere tiles,
