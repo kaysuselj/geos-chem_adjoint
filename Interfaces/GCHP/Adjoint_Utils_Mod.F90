@@ -630,21 +630,23 @@ END SUBROUTINE Integrate_Srf_Adjoint
     INTEGER,         INTENT(OUT)   :: RC
 
     ! Local variables
-    CHARACTER(LEN=512)      :: fname
-    TYPE(ESMF_VM)           :: vm
-    INTEGER                 :: STATUS
-    INTEGER                 :: ncid, varid, dimid, nf_rc
-    INTEGER                 :: nlat, nlon, nlev
-    INTEGER                 :: start4(4), count4(4)
-    REAL(f4), ALLOCATABLE   :: forcing_ll(:,:,:)   ! (nlon, nlat, nlev)
-    INTEGER                 :: file_flag
-    LOGICAL                 :: file_exists
-    INTEGER                 :: I, J, L, N
-    REAL(fp)                :: cell_lat, cell_lon
-    REAL(fp)                :: dlat, dlon, lat0, lon0
-    INTEGER                 :: ilat0, ilon0, ilat1, ilon1
-    REAL(fp)                :: wlat, wlon
-    REAL(fp)                :: f00, f10, f01, f11
+    CHARACTER(LEN=512)           :: fname
+    TYPE(ESMF_VM)                :: vm
+    INTEGER                      :: STATUS
+    INTEGER                      :: ncid, varid, dimid, nf_rc
+    INTEGER                      :: nlat, nlon, nlev
+    INTEGER                      :: start4(4), count4(4)
+    ! 1-D buffer (nlon*nlat*nlev); pointer alias used for nf90_get_var on root
+    REAL(f4), ALLOCATABLE, TARGET :: forcing_1d(:)
+    REAL(f4), POINTER             :: forcing_3d(:,:,:)
+    INTEGER                      :: file_flag
+    LOGICAL                      :: file_exists
+    INTEGER                      :: I, J, L, N, idx
+    REAL(fp)                     :: cell_lat, cell_lon
+    REAL(fp)                     :: dlat, dlon, lat0, lon0
+    INTEGER                      :: ilat0, ilon0, ilat1, ilon1
+    REAL(fp)                     :: wlat, wlon
+    REAL(fp)                     :: f00, f10, f01, f11
 
     RC = 0   ! success
 
@@ -694,33 +696,37 @@ END SUBROUTINE Integrate_Srf_Adjoint
     CALL MAPL_CommsBcast(vm, nlev, 1, 0, RC=STATUS)
     IF (STATUS /= ESMF_SUCCESS) THEN; RC = STATUS; RETURN; ENDIF
 
-    ! Allocate forcing buffer on every rank (zero-filled on non-root ranks)
-    ALLOCATE(forcing_ll(nlon, nlat, nlev))
-    forcing_ll = 0.0_f4
+    ! Allocate 1D buffer (nlon*nlat*nlev); zero on non-root ranks before broadcast
+    ALLOCATE(forcing_1d(nlon*nlat*nlev))
+    forcing_1d  = 0.0_f4
+    forcing_3d => NULL()
 
-    ! Root reads forcing variable: netCDF dims are (time,lev,lat,lon) in C order
-    ! → Fortran column-major order reverses to (nlon, nlat, nlev, ntime)
+    ! Root reads the variable using a 3D pointer alias over the same memory
     IF (MAPL_AM_I_ROOT(vm)) THEN
+       ! Pointer bounds-remapping: forcing_3d(i,j,l) => forcing_1d(i+(j-1)*nlon+(l-1)*nlon*nlat)
+       forcing_3d(1:nlon, 1:nlat, 1:nlev) => forcing_1d
        nf_rc = nf90_inq_varid(ncid, 'forcing', varid)
        start4 = (/1, 1, 1, 1/)
        count4 = (/nlon, nlat, nlev, 1/)
-       nf_rc = nf90_get_var(ncid, varid, forcing_ll, start=start4, count=count4)
+       nf_rc = nf90_get_var(ncid, varid, forcing_3d, start=start4, count=count4)
        IF (nf_rc /= NF90_NOERR) &
             WRITE(*,'(A,I0)') 'Load_OCO2_Adjoint_Forcing: nf90_get_var error ', nf_rc
+       NULLIFY(forcing_3d)
        nf_rc = nf90_close(ncid)
     ENDIF
 
-    ! Broadcast forcing array from rank 0 to all ranks via MAPL wrapper
-    CALL MAPL_CommsBcast(vm, forcing_ll, nlon*nlat*nlev, 0, RC=STATUS)
+    ! Broadcast the flat 1D buffer (matches MAPL_CommsBcastVm_R4_1 overload)
+    CALL MAPL_CommsBcast(vm, forcing_1d, nlon*nlat*nlev, 0, RC=STATUS)
     IF (STATUS /= ESMF_SUCCESS) THEN
-       DEALLOCATE(forcing_ll); RC = STATUS; RETURN
+       DEALLOCATE(forcing_1d); RC = STATUS; RETURN
     ENDIF
 
     ! Bilinear interpolation from regular lat/lon to cubed-sphere tiles,
     ! then accumulate into SpeciesAdj for the adjoint species (NFD).
     !
-    ! lat grid: lat0 + (ilat-1)*dlat, ilat = 1..nlat, lat0=-90
-    ! lon grid: lon0 + (ilon-1)*dlon, ilon = 1..nlon, lon0=-180, endpoint=False
+    ! Memory layout: forcing_1d(ilon + (ilat-1)*nlon + (L-1)*nlon*nlat)
+    ! lat grid: lat0 + (ilat-1)*dlat, ilat=1..nlat, lat0=-90
+    ! lon grid: lon0 + (ilon-1)*dlon, ilon=1..nlon, lon0=-180, endpoint=False
     dlat = 180.0_fp / REAL(nlat - 1, fp)
     dlon = 360.0_fp / REAL(nlon, fp)
     lat0 = -90.0_fp
@@ -751,10 +757,11 @@ END SUBROUTINE Integrate_Srf_Adjoint
        ilon1 = MOD(ilon0, nlon) + 1   ! wraps at the date line
 
        DO L = 1, State_Grid%NZ
-          f00 = REAL(forcing_ll(ilon0, ilat0, L), fp)
-          f10 = REAL(forcing_ll(ilon1, ilat0, L), fp)
-          f01 = REAL(forcing_ll(ilon0, ilat1, L), fp)
-          f11 = REAL(forcing_ll(ilon1, ilat1, L), fp)
+          idx = (L-1)*nlon*nlat
+          f00 = REAL(forcing_1d(ilon0 + (ilat0-1)*nlon + idx), fp)
+          f10 = REAL(forcing_1d(ilon1 + (ilat0-1)*nlon + idx), fp)
+          f01 = REAL(forcing_1d(ilon0 + (ilat1-1)*nlon + idx), fp)
+          f11 = REAL(forcing_1d(ilon1 + (ilat1-1)*nlon + idx), fp)
           State_Chm%SpeciesAdj(I,J,L,N) = State_Chm%SpeciesAdj(I,J,L,N)  &
                + (1.0_fp-wlat)*(1.0_fp-wlon)*f00                          &
                + (1.0_fp-wlat)*       wlon  *f10                          &
@@ -764,7 +771,7 @@ END SUBROUTINE Integrate_Srf_Adjoint
     ENDDO
     ENDDO
 
-    DEALLOCATE(forcing_ll)
+    DEALLOCATE(forcing_1d)
 
   END SUBROUTINE Load_OCO2_Adjoint_Forcing
 
