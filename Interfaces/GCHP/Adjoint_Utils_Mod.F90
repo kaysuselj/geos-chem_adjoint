@@ -606,19 +606,21 @@ END SUBROUTINE Integrate_Srf_Adjoint
 
 
   ! -----------------------------------------------------------------------
-  ! Load OCO-2 adjoint forcing from a lat/lon netCDF file (written by
-  ! co2_adjoint_forcing.py) and ADD it to State_Chm%SpeciesAdj.
+  ! Load OCO-2 adjoint forcing from a per-obs sparse netCDF file (written
+  ! by co2_adjoint_forcing.py) and ADD it to State_Chm%SpeciesAdj.
   !
-  ! Rank 0 reads the file; dimensions and the forcing array are broadcast
-  ! to all ranks via MAPL_CommsBcast / MPI_Bcast.  Each rank then does
-  ! bilinear interpolation from the regular lat/lon grid to its own
-  ! cubed-sphere tiles and accumulates the result into SpeciesAdj(I,J,L,NFD).
+  ! Rank 0 reads the file; n_obs, lat/lon arrays, and the forcing array
+  ! are broadcast to all ranks.  Each rank finds the nearest local cell
+  ! (minimum angular distance) for each obs and accumulates directly into
+  ! SpeciesAdj, without interpolation.  Since cubed-sphere tiles are
+  ! non-overlapping, each obs is accumulated by exactly one rank.
   !
   ! Forcing file: CO2_adjoint_forcing_YYYYMMDD_HHMMz.nc4
-  !   Variable : forcing(time=1, lev, lat, lon)  [1/(kg_CO2/kg_dry_air)]
-  !   lat      : nlat points, -90 → 90
-  !   lon      : nlon points, -180 → ~180 (endpoint=False)
-  !   lev      : 1=surface … LLPAR=TOA  (GEOS-Chem convention)
+  !   Dimensions: obs (n_obs), lev (nlev)
+  !   lat_obs  : (obs)      observation latitudes  [degrees_north]
+  !   lon_obs  : (obs)      observation longitudes [-180,180) [degrees_east]
+  !   forcing  : (obs, lev) dJ/d(CO2_mmr) [1/(kg_CO2/kg_dry_air)]
+  !              (Fortran reads as forcing_f(nlev, n_obs) — column-major)
   ! -----------------------------------------------------------------------
   SUBROUTINE Load_OCO2_Adjoint_Forcing( State_Chm, State_Grid, Input_Opt, &
                                          year, month, day, hour, minute, RC )
@@ -630,37 +632,35 @@ END SUBROUTINE Integrate_Srf_Adjoint
     INTEGER,         INTENT(OUT)   :: RC
 
     ! Local variables
-    CHARACTER(LEN=512)           :: fname
-    TYPE(ESMF_VM)                :: vm
-    INTEGER                      :: STATUS
-    INTEGER                      :: ncid, varid, dimid, nf_rc
-    INTEGER                      :: nlat, nlon, nlev
-    INTEGER                      :: start4(4), count4(4)
-    ! 1-D buffer (nlon*nlat*nlev); pointer alias used for nf90_get_var on root
-    REAL(f4), ALLOCATABLE, TARGET :: forcing_1d(:)
-    REAL(f4), POINTER             :: forcing_3d(:,:,:)
-    INTEGER                      :: file_flag
-    LOGICAL                      :: file_exists
-    INTEGER                      :: I, J, L, N, idx
-    REAL(fp)                     :: cell_lat, cell_lon
-    REAL(fp)                     :: dlat, dlon, lat0, lon0
-    INTEGER                      :: ilat0, ilon0, ilat1, ilon1
-    REAL(fp)                     :: wlat, wlon
-    REAL(fp)                     :: f00, f10, f01, f11
+    CHARACTER(LEN=512)              :: fname
+    TYPE(ESMF_VM)                   :: vm
+    INTEGER                         :: STATUS
+    INTEGER                         :: ncid, varid, dimid, nf_rc
+    INTEGER                         :: n_obs, nlev
+    INTEGER                         :: start1(1), count1(1)
+    INTEGER                         :: start2(2), count2(2)
+    REAL(f4), ALLOCATABLE           :: lat_obs(:), lon_obs(:)
+    ! forcing_1d holds forcing_obs(nlev, n_obs) in column-major as 1D for broadcast
+    REAL(f4), ALLOCATABLE, TARGET   :: forcing_1d(:)
+    REAL(f4), POINTER               :: forcing_obs(:,:)
+    INTEGER                         :: file_flag
+    LOGICAL                         :: file_exists
+    INTEGER                         :: I, J, L, K, N
+    REAL(fp)                        :: obs_lat, obs_lon
+    REAL(fp)                        :: obs_offset, lon_width
+    ! Tile bounding box built from cell edges; obs outside it belong to another rank.
+    REAL(fp)                        :: tile_lat_min, tile_lat_max
 
-    RC = 0   ! success
+    RC = 0
 
-    ! Build filename: OCO2_FORCING_DIR/CO2_adjoint_forcing_YYYYMMDD_HHMMz.nc4
     WRITE(fname,'(A,"/CO2_adjoint_forcing_",I4.4,I2.2,I2.2,"_",I2.2,I2.2,"z.nc4")') &
          TRIM(Input_Opt%OCO2_FORCING_DIR), year, month, day, hour, minute
 
-    ! Get ESMF VM for broadcast
     CALL ESMF_VMGetCurrent(vm, RC=STATUS)
     IF (STATUS /= ESMF_SUCCESS) THEN; RC = STATUS; RETURN; ENDIF
 
-    ! Rank 0 checks for the file and reads grid dimensions
     file_flag = 0
-    nlat = 0; nlon = 0; nlev = 0
+    n_obs = 0; nlev = 0
 
     IF (MAPL_AM_I_ROOT(vm)) THEN
        INQUIRE(FILE=TRIM(fname), EXIST=file_exists)
@@ -668,110 +668,114 @@ END SUBROUTINE Integrate_Srf_Adjoint
           nf_rc = nf90_open(TRIM(fname), NF90_NOWRITE, ncid)
           IF (nf_rc == NF90_NOERR) THEN
              file_flag = 1
-             nf_rc = nf90_inq_dimid(ncid, 'lat', dimid)
-             nf_rc = nf90_inquire_dimension(ncid, dimid, len=nlat)
-             nf_rc = nf90_inq_dimid(ncid, 'lon', dimid)
-             nf_rc = nf90_inquire_dimension(ncid, dimid, len=nlon)
+             nf_rc = nf90_inq_dimid(ncid, 'obs', dimid)
+             nf_rc = nf90_inquire_dimension(ncid, dimid, len=n_obs)
              nf_rc = nf90_inq_dimid(ncid, 'lev', dimid)
              nf_rc = nf90_inquire_dimension(ncid, dimid, len=nlev)
           ELSE
-             WRITE(*,'(A,I0,1X,A)') 'Load_OCO2_Adjoint_Forcing: nf90_open error ', &
-                  nf_rc, TRIM(fname)
+             WRITE(*,'(A,I0,1X,A)') 'Load_OCO2: nf90_open error ', nf_rc, TRIM(fname)
           ENDIF
        ELSE
-          WRITE(*,*) 'Load_OCO2_Adjoint_Forcing: zero forcing (file absent): ', &
-               TRIM(fname)
+          WRITE(*,*) 'Load_OCO2: no forcing file at this checkpoint: ', TRIM(fname)
        ENDIF
     ENDIF
 
-    ! Broadcast file status and dimensions to all ranks
     CALL MAPL_CommsBcast(vm, file_flag, 1, 0, RC=STATUS)
     IF (STATUS /= ESMF_SUCCESS) THEN; RC = STATUS; RETURN; ENDIF
-    IF (file_flag == 0) RETURN   ! no obs at this checkpoint → nothing to add
+    IF (file_flag == 0) RETURN
 
-    CALL MAPL_CommsBcast(vm, nlat, 1, 0, RC=STATUS)
-    IF (STATUS /= ESMF_SUCCESS) THEN; RC = STATUS; RETURN; ENDIF
-    CALL MAPL_CommsBcast(vm, nlon, 1, 0, RC=STATUS)
+    CALL MAPL_CommsBcast(vm, n_obs, 1, 0, RC=STATUS)
     IF (STATUS /= ESMF_SUCCESS) THEN; RC = STATUS; RETURN; ENDIF
     CALL MAPL_CommsBcast(vm, nlev, 1, 0, RC=STATUS)
     IF (STATUS /= ESMF_SUCCESS) THEN; RC = STATUS; RETURN; ENDIF
 
-    ! Allocate 1D buffer (nlon*nlat*nlev); zero on non-root ranks before broadcast
-    ALLOCATE(forcing_1d(nlon*nlat*nlev))
-    forcing_1d  = 0.0_f4
-    forcing_3d => NULL()
+    IF (n_obs == 0) THEN
+       IF (MAPL_AM_I_ROOT(vm)) nf_rc = nf90_close(ncid)
+       RETURN
+    ENDIF
 
-    ! Root reads the variable using a 3D pointer alias over the same memory
+    ALLOCATE(lat_obs(n_obs), lon_obs(n_obs))
+    ALLOCATE(forcing_1d(nlev*n_obs))
+    lat_obs    = 0.0_f4
+    lon_obs    = 0.0_f4
+    forcing_1d = 0.0_f4
+    forcing_obs => NULL()
+
     IF (MAPL_AM_I_ROOT(vm)) THEN
-       ! Pointer bounds-remapping: forcing_3d(i,j,l) => forcing_1d(i+(j-1)*nlon+(l-1)*nlon*nlat)
-       forcing_3d(1:nlon, 1:nlat, 1:nlev) => forcing_1d
+       start1 = (/1/); count1 = (/n_obs/)
+       nf_rc = nf90_inq_varid(ncid, 'lat_obs', varid)
+       nf_rc = nf90_get_var(ncid, varid, lat_obs, start=start1, count=count1)
+       nf_rc = nf90_inq_varid(ncid, 'lon_obs', varid)
+       nf_rc = nf90_get_var(ncid, varid, lon_obs, start=start1, count=count1)
+       ! Python dim order ('obs','lev') → Fortran reads as forcing_f(nlev, n_obs)
+       forcing_obs(1:nlev, 1:n_obs) => forcing_1d
+       start2 = (/1, 1/); count2 = (/nlev, n_obs/)
        nf_rc = nf90_inq_varid(ncid, 'forcing', varid)
-       start4 = (/1, 1, 1, 1/)
-       count4 = (/nlon, nlat, nlev, 1/)
-       nf_rc = nf90_get_var(ncid, varid, forcing_3d, start=start4, count=count4)
+       nf_rc = nf90_get_var(ncid, varid, forcing_obs, start=start2, count=count2)
        IF (nf_rc /= NF90_NOERR) &
-            WRITE(*,'(A,I0)') 'Load_OCO2_Adjoint_Forcing: nf90_get_var error ', nf_rc
-       NULLIFY(forcing_3d)
+            WRITE(*,'(A,I0)') 'Load_OCO2: nf90_get_var forcing error ', nf_rc
+       NULLIFY(forcing_obs)
        nf_rc = nf90_close(ncid)
     ENDIF
 
-    ! Broadcast the flat 1D buffer (matches MAPL_CommsBcastVm_R4_1 overload)
-    CALL MAPL_CommsBcast(vm, forcing_1d, nlon*nlat*nlev, 0, RC=STATUS)
+    CALL MAPL_CommsBcast(vm, lat_obs, n_obs, 0, RC=STATUS)
     IF (STATUS /= ESMF_SUCCESS) THEN
-       DEALLOCATE(forcing_1d); RC = STATUS; RETURN
+       DEALLOCATE(lat_obs, lon_obs, forcing_1d); RC = STATUS; RETURN
+    ENDIF
+    CALL MAPL_CommsBcast(vm, lon_obs, n_obs, 0, RC=STATUS)
+    IF (STATUS /= ESMF_SUCCESS) THEN
+       DEALLOCATE(lat_obs, lon_obs, forcing_1d); RC = STATUS; RETURN
+    ENDIF
+    CALL MAPL_CommsBcast(vm, forcing_1d, nlev*n_obs, 0, RC=STATUS)
+    IF (STATUS /= ESMF_SUCCESS) THEN
+       DEALLOCATE(lat_obs, lon_obs, forcing_1d); RC = STATUS; RETURN
     ENDIF
 
-    ! Bilinear interpolation from regular lat/lon to cubed-sphere tiles,
-    ! then accumulate into SpeciesAdj for the adjoint species (NFD).
-    !
-    ! Memory layout: forcing_1d(ilon + (ilat-1)*nlon + (L-1)*nlon*nlat)
-    ! lat grid: lat0 + (ilat-1)*dlat, ilat=1..nlat, lat0=-90
-    ! lon grid: lon0 + (ilon-1)*dlon, ilon=1..nlon, lon0=-180, endpoint=False
-    dlat = 180.0_fp / REAL(nlat - 1, fp)
-    dlon = 360.0_fp / REAL(nlon, fp)
-    lat0 = -90.0_fp
-    lon0 = -180.0_fp
-    N    = Input_Opt%NFD
+    ! Re-associate pointer after broadcast so loop can use (L,K) indexing
+    forcing_obs(1:nlev, 1:n_obs) => forcing_1d
+    N = Input_Opt%NFD
 
-    DO J = 1, State_Grid%NY
-    DO I = 1, State_Grid%NX
-       cell_lat = State_Grid%YMid(I,J)
-       cell_lon = State_Grid%XMid(I,J)
+    ! Tile bounding box built from cell lat edges for a fast early-out.
+    tile_lat_min = MINVAL(State_Grid%YMin(1:State_Grid%NX, 1:State_Grid%NY))
+    tile_lat_max = MAXVAL(State_Grid%YMax(1:State_Grid%NX, 1:State_Grid%NY))
 
-       ! Normalise longitude to [-180, 180)
-       DO WHILE (cell_lon >= 180.0_fp);  cell_lon = cell_lon - 360.0_fp; END DO
-       DO WHILE (cell_lon < -180.0_fp); cell_lon = cell_lon + 360.0_fp; END DO
+    ! Point-in-cell assignment: for each obs, find the unique local cell whose
+    ! lat/lon bounds [YMin,YMax) × [XMin,XMax) contain it and accumulate.
+    ! Because cubed-sphere cells tile the sphere without overlap, each obs
+    ! belongs to exactly one rank — no double-counting.
+    DO K = 1, n_obs
+       obs_lat = REAL(lat_obs(K), fp)
+       obs_lon = REAL(lon_obs(K), fp)
 
-       ! Lower-left corner indices (1-based) and bilinear weights
-       ilat0 = INT((cell_lat - lat0) / dlat) + 1
-       ilon0 = INT((cell_lon - lon0) / dlon) + 1
-       ilat0 = MAX(1, MIN(ilat0, nlat - 1))
-       ilon0 = MAX(1, MIN(ilon0, nlon))
+       ! Skip obs whose lat is outside this rank's tile entirely
+       IF (obs_lat < tile_lat_min .OR. obs_lat >= tile_lat_max) CYCLE
 
-       wlat = (cell_lat - (lat0 + REAL(ilat0-1, fp)*dlat)) / dlat
-       wlon = (cell_lon - (lon0 + REAL(ilon0-1, fp)*dlon)) / dlon
-       wlat = MAX(0.0_fp, MIN(1.0_fp, wlat))
-       wlon = MAX(0.0_fp, MIN(1.0_fp, wlon))
+       cell_search: DO J = 1, State_Grid%NY
+       DO I = 1, State_Grid%NX
+          ! Lat containment: [YMin, YMax)
+          IF (obs_lat < State_Grid%YMin(I,J) .OR. &
+              obs_lat >= State_Grid%YMax(I,J)) CYCLE
 
-       ilat1 = ilat0 + 1
-       ilon1 = MOD(ilon0, nlon) + 1   ! wraps at the date line
+          ! Lon containment: normalize obs offset from XMin to [0,360)
+          obs_offset = obs_lon - State_Grid%XMin(I,J)
+          IF (obs_offset <    0.0_fp) obs_offset = obs_offset + 360.0_fp
+          IF (obs_offset >= 360.0_fp) obs_offset = obs_offset - 360.0_fp
+          lon_width = State_Grid%XMax(I,J) - State_Grid%XMin(I,J)
+          IF (lon_width <= 0.0_fp) lon_width = lon_width + 360.0_fp
+          IF (obs_offset > lon_width) CYCLE
 
-       DO L = 1, State_Grid%NZ
-          idx = (L-1)*nlon*nlat
-          f00 = REAL(forcing_1d(ilon0 + (ilat0-1)*nlon + idx), fp)
-          f10 = REAL(forcing_1d(ilon1 + (ilat0-1)*nlon + idx), fp)
-          f01 = REAL(forcing_1d(ilon0 + (ilat1-1)*nlon + idx), fp)
-          f11 = REAL(forcing_1d(ilon1 + (ilat1-1)*nlon + idx), fp)
-          State_Chm%SpeciesAdj(I,J,L,N) = State_Chm%SpeciesAdj(I,J,L,N)  &
-               + (1.0_fp-wlat)*(1.0_fp-wlon)*f00                          &
-               + (1.0_fp-wlat)*       wlon  *f10                          &
-               +        wlat  *(1.0_fp-wlon)*f01                          &
-               +        wlat  *       wlon  *f11
+          ! Obs is inside cell (I,J): accumulate and move to next obs
+          DO L = 1, MIN(State_Grid%NZ, nlev)
+             State_Chm%SpeciesAdj(I,J,L,N) = State_Chm%SpeciesAdj(I,J,L,N) + &
+                  REAL(forcing_obs(L,K), fp)
+          ENDDO
+          EXIT cell_search
        ENDDO
-    ENDDO
+       ENDDO cell_search
     ENDDO
 
-    DEALLOCATE(forcing_1d)
+    NULLIFY(forcing_obs)
+    DEALLOCATE(lat_obs, lon_obs, forcing_1d)
 
   END SUBROUTINE Load_OCO2_Adjoint_Forcing
 
