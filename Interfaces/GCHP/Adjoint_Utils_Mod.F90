@@ -26,6 +26,7 @@ MODULE Adjoint_Utils_Mod
   PUBLIC :: Pop_State
   PUBLIC :: Setup_Adjoint_ForwardPert
   PUBLIC :: Integrate_Srf_Adjoint
+  PUBLIC :: Load_OCO2_Adjoint_Forcing
 
   ! Container for the saved data
   ! We do NOT save the whole Type(ChmState), only the adjointed array.
@@ -601,6 +602,172 @@ SUBROUTINE  Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met, &
 
       
 END SUBROUTINE Integrate_Srf_Adjoint
+
+
+  ! -----------------------------------------------------------------------
+  ! Load OCO-2 adjoint forcing from a lat/lon netCDF file (written by
+  ! co2_adjoint_forcing.py) and ADD it to State_Chm%SpeciesAdj.
+  !
+  ! Rank 0 reads the file; dimensions and the forcing array are broadcast
+  ! to all ranks via MAPL_CommsBcast / MPI_Bcast.  Each rank then does
+  ! bilinear interpolation from the regular lat/lon grid to its own
+  ! cubed-sphere tiles and accumulates the result into SpeciesAdj(I,J,L,NFD).
+  !
+  ! Forcing file: CO2_adjoint_forcing_YYYYMMDD_HHMMz.nc4
+  !   Variable : forcing(time=1, lev, lat, lon)  [1/(kg_CO2/kg_dry_air)]
+  !   lat      : nlat points, -90 → 90
+  !   lon      : nlon points, -180 → ~180 (endpoint=False)
+  !   lev      : 1=surface … LLPAR=TOA  (GEOS-Chem convention)
+  ! -----------------------------------------------------------------------
+  SUBROUTINE Load_OCO2_Adjoint_Forcing( State_Chm, State_Grid, Input_Opt, &
+                                         year, month, day, hour, minute, RC )
+
+    TYPE(ChmState),  INTENT(INOUT) :: State_Chm
+    TYPE(GrdState),  INTENT(IN)    :: State_Grid
+    TYPE(OptInput),  INTENT(IN)    :: Input_Opt
+    INTEGER,         INTENT(IN)    :: year, month, day, hour, minute
+    INTEGER,         INTENT(OUT)   :: RC
+
+    ! Local variables
+    CHARACTER(LEN=512)      :: fname
+    TYPE(ESMF_VM)           :: vm
+    INTEGER                 :: comm, STATUS
+    INTEGER                 :: ncid, varid, dimid, nf_rc
+    INTEGER                 :: nlat, nlon, nlev
+    INTEGER                 :: start4(4), count4(4)
+    REAL(f4), ALLOCATABLE   :: forcing_ll(:,:,:)   ! (nlon, nlat, nlev)
+    INTEGER                 :: file_flag
+    LOGICAL                 :: file_exists
+    INTEGER                 :: I, J, L, N
+    REAL(fp)                :: cell_lat, cell_lon
+    REAL(fp)                :: dlat, dlon, lat0, lon0
+    INTEGER                 :: ilat0, ilon0, ilat1, ilon1
+    REAL(fp)                :: wlat, wlon
+    REAL(fp)                :: f00, f10, f01, f11
+
+    RC = 0   ! success
+
+    ! Build filename: OCO2_FORCING_DIR/CO2_adjoint_forcing_YYYYMMDD_HHMMz.nc4
+    WRITE(fname,'(A,"/CO2_adjoint_forcing_",I4.4,I2.2,I2.2,"_",I2.2,I2.2,"z.nc4")') &
+         TRIM(Input_Opt%OCO2_FORCING_DIR), year, month, day, hour, minute
+
+    ! Get ESMF VM and MPI communicator
+    CALL ESMF_VMGetCurrent(vm, RC=STATUS)
+    IF (STATUS /= ESMF_SUCCESS) THEN; RC = STATUS; RETURN; ENDIF
+    CALL ESMF_VMGet(vm, MPICOMMUNICATOR=comm, RC=STATUS)
+    IF (STATUS /= ESMF_SUCCESS) THEN; RC = STATUS; RETURN; ENDIF
+
+    ! Rank 0 checks for the file and reads grid dimensions
+    file_flag = 0
+    nlat = 0; nlon = 0; nlev = 0
+
+    IF (MAPL_AM_I_ROOT(vm)) THEN
+       INQUIRE(FILE=TRIM(fname), EXIST=file_exists)
+       IF (file_exists) THEN
+          nf_rc = NF_OPEN(TRIM(fname), NF_NOWRITE, ncid)
+          IF (nf_rc == NF_NOERR) THEN
+             file_flag = 1
+             nf_rc = NF_INQ_DIMID(ncid, 'lat', dimid)
+             nf_rc = NF_INQ_DIMLEN(ncid, dimid, nlat)
+             nf_rc = NF_INQ_DIMID(ncid, 'lon', dimid)
+             nf_rc = NF_INQ_DIMLEN(ncid, dimid, nlon)
+             nf_rc = NF_INQ_DIMID(ncid, 'lev', dimid)
+             nf_rc = NF_INQ_DIMLEN(ncid, dimid, nlev)
+          ELSE
+             WRITE(*,'(A,I0,1X,A)') 'Load_OCO2_Adjoint_Forcing: NF_OPEN error ', &
+                  nf_rc, TRIM(fname)
+          ENDIF
+       ELSE
+          WRITE(*,*) 'Load_OCO2_Adjoint_Forcing: zero forcing (file absent): ', &
+               TRIM(fname)
+       ENDIF
+    ENDIF
+
+    ! Broadcast file status and dimensions to all ranks
+    CALL MAPL_CommsBcast(vm, file_flag, 1, 0, RC=STATUS)
+    IF (STATUS /= ESMF_SUCCESS) THEN; RC = STATUS; RETURN; ENDIF
+    IF (file_flag == 0) RETURN   ! no obs at this checkpoint → nothing to add
+
+    CALL MAPL_CommsBcast(vm, nlat, 1, 0, RC=STATUS)
+    IF (STATUS /= ESMF_SUCCESS) THEN; RC = STATUS; RETURN; ENDIF
+    CALL MAPL_CommsBcast(vm, nlon, 1, 0, RC=STATUS)
+    IF (STATUS /= ESMF_SUCCESS) THEN; RC = STATUS; RETURN; ENDIF
+    CALL MAPL_CommsBcast(vm, nlev, 1, 0, RC=STATUS)
+    IF (STATUS /= ESMF_SUCCESS) THEN; RC = STATUS; RETURN; ENDIF
+
+    ! Allocate forcing buffer on every rank (zero-filled on non-root ranks)
+    ALLOCATE(forcing_ll(nlon, nlat, nlev))
+    forcing_ll = 0.0_f4
+
+    ! Root reads forcing variable: netCDF dims are (time,lev,lat,lon) in C order
+    ! → Fortran column-major order reverses to (nlon, nlat, nlev, ntime)
+    IF (MAPL_AM_I_ROOT(vm)) THEN
+       nf_rc = NF_INQ_VARID(ncid, 'forcing', varid)
+       start4 = (/1, 1, 1, 1/)
+       count4 = (/nlon, nlat, nlev, 1/)
+       nf_rc = NF_GET_VARA_REAL(ncid, varid, start4, count4, forcing_ll)
+       IF (nf_rc /= NF_NOERR) &
+            WRITE(*,'(A,I0)') 'Load_OCO2_Adjoint_Forcing: NF_GET_VARA_REAL error ', nf_rc
+       nf_rc = NF_CLOSE(ncid)
+    ENDIF
+
+    ! Broadcast forcing array from rank 0 to all ranks
+    CALL MPI_Bcast(forcing_ll, nlon*nlat*nlev, MPI_REAL, 0, comm, STATUS)
+    IF (STATUS /= 0) THEN
+       DEALLOCATE(forcing_ll); RC = ESMF_FAILURE; RETURN
+    ENDIF
+
+    ! Bilinear interpolation from regular lat/lon to cubed-sphere tiles,
+    ! then accumulate into SpeciesAdj for the adjoint species (NFD).
+    !
+    ! lat grid: lat0 + (ilat-1)*dlat, ilat = 1..nlat, lat0=-90
+    ! lon grid: lon0 + (ilon-1)*dlon, ilon = 1..nlon, lon0=-180, endpoint=False
+    dlat = 180.0_fp / REAL(nlat - 1, fp)
+    dlon = 360.0_fp / REAL(nlon, fp)
+    lat0 = -90.0_fp
+    lon0 = -180.0_fp
+    N    = Input_Opt%NFD
+
+    DO J = 1, State_Grid%NY
+    DO I = 1, State_Grid%NX
+       cell_lat = State_Grid%YMid(I,J)
+       cell_lon = State_Grid%XMid(I,J)
+
+       ! Normalise longitude to [-180, 180)
+       DO WHILE (cell_lon >= 180.0_fp);  cell_lon = cell_lon - 360.0_fp; END DO
+       DO WHILE (cell_lon < -180.0_fp); cell_lon = cell_lon + 360.0_fp; END DO
+
+       ! Lower-left corner indices (1-based) and bilinear weights
+       ilat0 = INT((cell_lat - lat0) / dlat) + 1
+       ilon0 = INT((cell_lon - lon0) / dlon) + 1
+       ilat0 = MAX(1, MIN(ilat0, nlat - 1))
+       ilon0 = MAX(1, MIN(ilon0, nlon))
+
+       wlat = (cell_lat - (lat0 + REAL(ilat0-1, fp)*dlat)) / dlat
+       wlon = (cell_lon - (lon0 + REAL(ilon0-1, fp)*dlon)) / dlon
+       wlat = MAX(0.0_fp, MIN(1.0_fp, wlat))
+       wlon = MAX(0.0_fp, MIN(1.0_fp, wlon))
+
+       ilat1 = ilat0 + 1
+       ilon1 = MOD(ilon0, nlon) + 1   ! wraps at the date line
+
+       DO L = 1, State_Grid%NZ
+          f00 = REAL(forcing_ll(ilon0, ilat0, L), fp)
+          f10 = REAL(forcing_ll(ilon1, ilat0, L), fp)
+          f01 = REAL(forcing_ll(ilon0, ilat1, L), fp)
+          f11 = REAL(forcing_ll(ilon1, ilat1, L), fp)
+          State_Chm%SpeciesAdj(I,J,L,N) = State_Chm%SpeciesAdj(I,J,L,N)  &
+               + (1.0_fp-wlat)*(1.0_fp-wlon)*f00                          &
+               + (1.0_fp-wlat)*       wlon  *f10                          &
+               +        wlat  *(1.0_fp-wlon)*f01                          &
+               +        wlat  *       wlon  *f11
+       ENDDO
+    ENDDO
+    ENDDO
+
+    DEALLOCATE(forcing_ll)
+
+  END SUBROUTINE Load_OCO2_Adjoint_Forcing
 
 
 END MODULE Adjoint_Utils_Mod

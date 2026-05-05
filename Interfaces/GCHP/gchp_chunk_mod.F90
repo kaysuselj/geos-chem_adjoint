@@ -164,6 +164,7 @@ CONTAINS
    INTEGER                        :: AdjSfluxCat, AdjSfluxHier
    INTEGER                        :: AdjSfluxNA
     CHARACTER(LEN=ESMF_MAXSTR)     :: FD_TYPE
+    INTEGER                        :: adj_from_file_int
 
    ! At present, we are unable to load cube-sphere files through ExtData
    ! so we will define the cost function region thusly in GCHP.rc
@@ -323,6 +324,17 @@ CONTAINS
 
     call ESMF_ConfigGetAttribute(CF, Input_Opt%Adjoint_Val, &
          Label="ADJOINT_VAL:", Default=1.0d0, RC=STATUS)
+    _VERIFY(STATUS)
+
+    adj_from_file_int = 0
+    call ESMF_ConfigGetAttribute(CF, adj_from_file_int, &
+         Label="ADJOINT_FROM_FILE:", Default=0, RC=STATUS)
+    _VERIFY(STATUS)
+    Input_Opt%ADJOINT_FROM_FILE = (adj_from_file_int /= 0)
+
+    Input_Opt%OCO2_FORCING_DIR = ''
+    call ESMF_ConfigGetAttribute(CF, Input_Opt%OCO2_FORCING_DIR, &
+         Label="OCO2_FORCING_DIR:", Default="", RC=STATUS)
     _VERIFY(STATUS)
 
     IF (Input_Opt%IS_FD_GLOBAL .or. Input_Opt%IS_FD_SPOT)  THEN
@@ -759,7 +771,8 @@ CONTAINS
     USE PhysConstants,      ONLY : AIRMW
     USE Diagnostics_Mod,    ONLY :  Set_SpcAdj_Diagnostic
     USE Adjoint_Utils_Mod,  ONLY : Push_State,Pop_State,State_Snapshot, &
-                     Setup_Adjoint_ForwardPert,Integrate_Srf_Adjoint
+                     Setup_Adjoint_ForwardPert,Integrate_Srf_Adjoint, &
+                     Load_OCO2_Adjoint_Forcing
 #endif
 
 #if defined( RRTMG )
@@ -1176,7 +1189,8 @@ CONTAINS
   !  ({X,Y,Z,T}_i is the location at the prescribed location/time)
   !  formally we call units KG_PER_KG_DRY
   ! 
-   IF (first) &  CALL Setup_Adjoint_ForwardPert(State_Chm,State_Grid,Input_Opt)
+   IF (first .AND. .NOT. Input_Opt%ADJOINT_FROM_FILE) &
+       CALL Setup_Adjoint_ForwardPert(State_Chm,State_Grid,Input_Opt)
 
    
 
@@ -1750,10 +1764,16 @@ CONTAINS
  IF (Is_Adjoint ) THEN
      ! set the adjoint state of Input_Opt
      Input_Opt%Is_Adjoint=Is_Adjoint
-     
-     
-   !  
-   ! 1. TURBULENCE  
+
+     ! Load OCO-2 adjoint forcing from file and accumulate into SpeciesAdj
+     IF ( DoChem .AND. Input_Opt%ADJOINT_FROM_FILE ) THEN
+        CALL Load_OCO2_Adjoint_Forcing( State_Chm, State_Grid, Input_Opt, &
+                                        year, month, day, hour, minute, STATUS )
+        _VERIFY(STATUS)
+     ENDIF
+
+   !
+   ! 1. TURBULENCE
    !
      
    IF ( DoTurb ) THEN
