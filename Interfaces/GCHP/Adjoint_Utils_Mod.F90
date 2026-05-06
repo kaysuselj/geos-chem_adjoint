@@ -646,10 +646,12 @@ END SUBROUTINE Integrate_Srf_Adjoint
     INTEGER                         :: file_flag
     LOGICAL                         :: file_exists
     INTEGER                         :: I, J, L, K, N
+    INTEGER                         :: best_I, best_J
     REAL(fp)                        :: obs_lat, obs_lon
-    REAL(fp)                        :: obs_offset, lon_width
-    ! Tile bounding box built from cell edges; obs outside it belong to another rank.
-    REAL(fp)                        :: tile_lat_min, tile_lat_max
+    REAL(fp)                        :: cell_lat, cell_lon, dlon_diff
+    REAL(fp)                        :: dist2, best_dist2, max_dist2
+    ! Tile lat envelope computed from cell centres (YMin/YMax scalars may be unset)
+    REAL(fp)                        :: tile_lat_min, tile_lat_max, cell_size_deg
 
     RC = 0
 
@@ -735,45 +737,57 @@ END SUBROUTINE Integrate_Srf_Adjoint
     forcing_obs(1:nlev, 1:n_obs) => forcing_1d
     N = Input_Opt%NFD
 
-    ! State_Grid%YMin / YMax are scalars giving this rank's tile lat envelope.
-    ! YEdge(NX, NY+1): cell (I,J) south edge = YEdge(I,J), north = YEdge(I,J+1)
-    ! XEdge(NX+1, NY): cell (I,J) west  edge = XEdge(I,J), east  = XEdge(I+1,J)
-    tile_lat_min = State_Grid%YMin
-    tile_lat_max = State_Grid%YMax
+    ! Tile lat envelope from cell centres.  State_Grid%YMin/YMax scalars are
+    ! initialised to 0 and not guaranteed to be set by GCHP, so compute them
+    ! from YMid instead.  Add one cell-width buffer to cover the cell edges.
+    cell_size_deg = 90.0_fp / REAL(State_Grid%NY, fp)
+    tile_lat_min  = MINVAL(State_Grid%YMid(1:State_Grid%NX, 1:State_Grid%NY)) &
+                    - cell_size_deg
+    tile_lat_max  = MAXVAL(State_Grid%YMid(1:State_Grid%NX, 1:State_Grid%NY)) &
+                    + cell_size_deg
 
-    ! Point-in-cell assignment: for each obs, find the unique local cell whose
-    ! lat/lon bounds contain it and accumulate directly.
-    ! Because cubed-sphere cells tile the sphere without overlap, each obs
-    ! belongs to exactly one rank — no double-counting.
+    ! Threshold: squared angular distance (degrees) within which an obs is
+    ! considered "on" this rank's tile.  1.5 × cell_size is tight enough to
+    ! exclude cells on neighbouring faces (which are ≥ one face-width away)
+    ! while large enough to catch all obs interior to this tile.
+    max_dist2 = (1.5_fp * cell_size_deg)**2
+
+    ! Nearest-centre assignment: for each obs within the tile lat envelope,
+    ! find the local cell whose centre is closest.  Accumulate only when the
+    ! squared distance is within max_dist2, ensuring this rank — not a
+    ! neighbouring face — owns the obs.
     DO K = 1, n_obs
        obs_lat = REAL(lat_obs(K), fp)
        obs_lon = REAL(lon_obs(K), fp)
 
-       ! Skip obs whose lat is outside this rank's tile entirely
-       IF (obs_lat < tile_lat_min .OR. obs_lat >= tile_lat_max) CYCLE
+       IF (obs_lat < tile_lat_min .OR. obs_lat > tile_lat_max) CYCLE
 
-       cell_search: DO J = 1, State_Grid%NY
+       best_dist2 = HUGE(1.0_fp)
+       best_I = 1; best_J = 1
+
+       DO J = 1, State_Grid%NY
        DO I = 1, State_Grid%NX
-          ! Lat containment: [YEdge(I,J), YEdge(I,J+1))
-          IF (obs_lat < State_Grid%YEdge(I,J) .OR. &
-              obs_lat >= State_Grid%YEdge(I,J+1)) CYCLE
+          cell_lat  = State_Grid%YMid(I,J)
+          cell_lon  = State_Grid%XMid(I,J)
+          DO WHILE (cell_lon >= 180.0_fp); cell_lon = cell_lon - 360.0_fp; END DO
+          DO WHILE (cell_lon < -180.0_fp); cell_lon = cell_lon + 360.0_fp; END DO
+          dlon_diff = obs_lon - cell_lon
+          IF (dlon_diff >  180.0_fp) dlon_diff = dlon_diff - 360.0_fp
+          IF (dlon_diff < -180.0_fp) dlon_diff = dlon_diff + 360.0_fp
+          dist2 = (obs_lat - cell_lat)**2 + dlon_diff**2
+          IF (dist2 < best_dist2) THEN
+             best_dist2 = dist2
+             best_I = I; best_J = J
+          ENDIF
+       ENDDO; ENDDO
 
-          ! Lon containment: normalize obs offset from west edge to [0,360)
-          obs_offset = obs_lon - State_Grid%XEdge(I,J)
-          IF (obs_offset <    0.0_fp) obs_offset = obs_offset + 360.0_fp
-          IF (obs_offset >= 360.0_fp) obs_offset = obs_offset - 360.0_fp
-          lon_width  = State_Grid%XEdge(I+1,J) - State_Grid%XEdge(I,J)
-          IF (lon_width <= 0.0_fp) lon_width = lon_width + 360.0_fp
-          IF (obs_offset > lon_width) CYCLE
-
-          ! Obs is inside cell (I,J): accumulate and move to next obs
+       IF (best_dist2 <= max_dist2) THEN
           DO L = 1, MIN(State_Grid%NZ, nlev)
-             State_Chm%SpeciesAdj(I,J,L,N) = State_Chm%SpeciesAdj(I,J,L,N) + &
+             State_Chm%SpeciesAdj(best_I,best_J,L,N) = &
+                  State_Chm%SpeciesAdj(best_I,best_J,L,N) + &
                   REAL(forcing_obs(L,K), fp)
           ENDDO
-          EXIT cell_search
-       ENDDO
-       ENDDO cell_search
+       ENDIF
     ENDDO
 
     NULLIFY(forcing_obs)
