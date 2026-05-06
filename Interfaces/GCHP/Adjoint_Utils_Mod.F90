@@ -735,12 +735,14 @@ END SUBROUTINE Integrate_Srf_Adjoint
     forcing_obs(1:nlev, 1:n_obs) => forcing_1d
     N = Input_Opt%NFD
 
-    ! Tile bounding box built from cell lat edges for a fast early-out.
-    tile_lat_min = MINVAL(State_Grid%YMin(1:State_Grid%NX, 1:State_Grid%NY))
-    tile_lat_max = MAXVAL(State_Grid%YMax(1:State_Grid%NX, 1:State_Grid%NY))
+    ! State_Grid%YMin / YMax are scalars giving this rank's tile lat envelope.
+    ! YEdge(NX, NY+1): cell (I,J) south edge = YEdge(I,J), north = YEdge(I,J+1)
+    ! XEdge(NX+1, NY): cell (I,J) west  edge = XEdge(I,J), east  = XEdge(I+1,J)
+    tile_lat_min = State_Grid%YMin
+    tile_lat_max = State_Grid%YMax
 
     ! Point-in-cell assignment: for each obs, find the unique local cell whose
-    ! lat/lon bounds [YMin,YMax) × [XMin,XMax) contain it and accumulate.
+    ! lat/lon bounds contain it and accumulate directly.
     ! Because cubed-sphere cells tile the sphere without overlap, each obs
     ! belongs to exactly one rank — no double-counting.
     DO K = 1, n_obs
@@ -752,15 +754,15 @@ END SUBROUTINE Integrate_Srf_Adjoint
 
        cell_search: DO J = 1, State_Grid%NY
        DO I = 1, State_Grid%NX
-          ! Lat containment: [YMin, YMax)
-          IF (obs_lat < State_Grid%YMin(I,J) .OR. &
-              obs_lat >= State_Grid%YMax(I,J)) CYCLE
+          ! Lat containment: [YEdge(I,J), YEdge(I,J+1))
+          IF (obs_lat < State_Grid%YEdge(I,J) .OR. &
+              obs_lat >= State_Grid%YEdge(I,J+1)) CYCLE
 
-          ! Lon containment: normalize obs offset from XMin to [0,360)
-          obs_offset = obs_lon - State_Grid%XMin(I,J)
+          ! Lon containment: normalize obs offset from west edge to [0,360)
+          obs_offset = obs_lon - State_Grid%XEdge(I,J)
           IF (obs_offset <    0.0_fp) obs_offset = obs_offset + 360.0_fp
           IF (obs_offset >= 360.0_fp) obs_offset = obs_offset - 360.0_fp
-          lon_width = State_Grid%XMax(I,J) - State_Grid%XMin(I,J)
+          lon_width  = State_Grid%XEdge(I+1,J) - State_Grid%XEdge(I,J)
           IF (lon_width <= 0.0_fp) lon_width = lon_width + 360.0_fp
           IF (obs_offset > lon_width) CYCLE
 
