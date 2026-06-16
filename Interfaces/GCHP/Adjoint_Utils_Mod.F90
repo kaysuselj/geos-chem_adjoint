@@ -576,21 +576,21 @@ SUBROUTINE  Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met, &
                State_Chm%SpeciesAdj(:,:,1,NFD) *                                  &
                ( SurfaceFluxForward * dt / ( rho_dry * dz ) )
 
-        IF ( Input_Opt%amIRoot ) THEN
-                WRITE(*,*) 'Integrate_Srf_Adjoint: NFD=', NFD,                    &
-                   ' dt=', dt,                                                     &
-                   ' max|surf_flux|=', MAXVAL( ABS( SurfaceFluxForward ) ),        &
-                   ' max|rho_dry|=', MAXVAL( ABS( rho_dry ) ),                &
-                   ' max|dz|=', MAXVAL( ABS( dz ) ),                          &
-             ' max|SpeciesAdj(sfc)|=',                                   &
-             MAXVAL( ABS( State_Chm%SpeciesAdj(:,:,1,NFD) ) ),          &
-                   ' max|SpeciesAdj(global)|=',                                &
-                   MAXVAL( ABS( State_Chm%SpeciesAdj(:,:,:,NFD) ) ),          &
-             ' max|SurfaceFluxAdj|=',                                    &
-               MAXVAL( ABS( State_Chm%SurfaceFluxAdj(:,:,NFD) ) ),       &
-                   ' max|SurfaceFluxAdj(global)|=',                            &
-                                 MAXVAL( ABS( State_Chm%SurfaceFluxAdj(:,:,:) ) )
-        ENDIF
+!        IF ( Input_Opt%amIRoot ) THEN
+!                WRITE(*,*) 'Integrate_Srf_Adjoint: NFD=', NFD,                    &
+!                   ' dt=', dt,                                                     &
+!                   ' max|surf_flux|=', MAXVAL( ABS( SurfaceFluxForward ) ),        &
+!                   ' max|rho_dry|=', MAXVAL( ABS( rho_dry ) ),                &
+!                   ' max|dz|=', MAXVAL( ABS( dz ) ),                          &
+!             ' max|SpeciesAdj(sfc)|=',                                   &
+!             MAXVAL( ABS( State_Chm%SpeciesAdj(:,:,1,NFD) ) ),          &
+!                   ' max|SpeciesAdj(global)|=',                                &
+!                   MAXVAL( ABS( State_Chm%SpeciesAdj(:,:,:,NFD) ) ),          &
+!             ' max|SurfaceFluxAdj|=',                                    &
+!               MAXVAL( ABS( State_Chm%SurfaceFluxAdj(:,:,NFD) ) ),       &
+!                   ' max|SurfaceFluxAdj(global)|=',                            &
+!                                 MAXVAL( ABS( State_Chm%SurfaceFluxAdj(:,:,:) ) )
+!        ENDIF
 
       CALL Convert_Spc_Units(                                                  &
          Input_Opt      = Input_Opt,                                         &

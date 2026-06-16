@@ -1019,7 +1019,7 @@ CONTAINS
     DoTend = ( DoEmis .OR. DoDryDep ) .AND. .NOT. Input_Opt%LTURB
 
     ! testing only
-    IF ( NCALLS < 10 ) THEN
+    IF ( NCALLS < 3 ) THEN
        ! Use pfLogger
        Call Input_Opt%lgr%info('GEOS-Chem phase %i2~:', Phase)
        Call Input_Opt%lgr%info('DoConv   : %l1', DoConv)
@@ -1134,9 +1134,9 @@ CONTAINS
          previous_units = previous_units,                                    &
          RC             = RC                                                )
     _ASSERT(RC==GC_SUCCESS, 'Error calling CONVERT_SPC_UNITS')
-    if (Input_Opt%AmIRoot .and. NCALLS < 10) then
-       write(*,*) ' previous_units = ', previous_units
-    endif
+!    if (Input_Opt%AmIRoot .and. NCALLS < 10) then
+!       write(*,*) ' previous_units = ', previous_units
+!    endif
 
     !=======================================================================
     ! Always prescribe H2O in both the stratosphere and troposhere in GEOS.
@@ -1177,8 +1177,8 @@ CONTAINS
                           'CO2', Input_Opt, State_Chm,   &
                           State_Grid, State_Met, trim(Iam) // &
                           ' before first unit conversion', RC)
-     CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
-        State_Grid, State_Met,State_Chm, trim(Iam) // ' before first unit conversion.', RC)
+!     CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
+!        State_Grid, State_Met,State_Chm, trim(Iam) // ' before first unit conversion.', RC)
     endif
    
   !
@@ -1258,13 +1258,13 @@ CONTAINS
    if (Is_Adjoint) & 
    CALL Push_State(State_Chm,S_Pre_Conv,State_Grid%NX,State_Grid%NY,State_Grid%NZ,Input_Opt%NFD)
    
-   if (debug_adjoint) &
-     CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
-         State_Grid, State_Met,State_Chm, trim(Iam) // ' fwd before convection.', RC)
+!   if (debug_adjoint) &
+!     CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
+!         State_Grid, State_Met,State_Chm, trim(Iam) // ' fwd before convection.', RC)
 
 #endif 
 
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Do convection now'
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Do convection now'
        CALL MAPL_TimerOn( STATE, 'GC_CONV' )
 
        CALL DO_CONVECTION ( Input_Opt, State_Chm, State_Diag, &
@@ -1272,7 +1272,7 @@ CONTAINS
        _ASSERT(RC==GC_SUCCESS, 'Error calling DO_CONVECTION')
 
        CALL MAPL_TimerOff( STATE, 'GC_CONV' )
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Convection done!'
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Convection done!'
  
   
  
@@ -1284,10 +1284,10 @@ CONTAINS
     ! Calculates the deposition rates in [s-1].
     !=======================================================================
     IF ( DoDryDep ) THEN
-       if(Input_Opt%AmIRoot.and.NCALLS<10) THEN
-          write(*,*) ' --- Do drydep now'
-          write(*,*) '     Use FULL PBL: ', Input_Opt%PBL_DRYDEP
-       endif
+!       if(Input_Opt%AmIRoot.and.NCALLS<3) THEN
+!          write(*,*) ' --- Do drydep now'
+!          write(*,*) '     Use FULL PBL: ', Input_Opt%PBL_DRYDEP
+!       endif
        CALL MAPL_TimerOn( STATE, 'GC_DRYDEP' )
 
        ! Do dry deposition
@@ -1296,7 +1296,7 @@ CONTAINS
        _ASSERT(RC==GC_SUCCESS, 'Error calling Do_DryDep')
 
        CALL MAPL_TimerOff( STATE, 'GC_DRYDEP' )
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Drydep done!'
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Drydep done!'
     ENDIF
 
     !=======================================================================
@@ -1317,7 +1317,7 @@ CONTAINS
        endif
 #endif
 
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Do emissions now'
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Do emissions now'
        CALL MAPL_TimerOn( STATE, 'GC_EMIS' )
 
        ! Do emissions. Pass HEMCO Phase 2 which performs the emissions
@@ -1328,7 +1328,7 @@ CONTAINS
        _ASSERT(RC==GC_SUCCESS, 'Error calling EMISSIONS_RUN')
 
        CALL MAPL_TimerOff( STATE, 'GC_EMIS' )
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Emissions done!'
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Emissions done!'
 
        ! Optional memory prints (level >= 3)
        if ( MemDebugLevel > 0 ) THEN
@@ -1349,7 +1349,7 @@ CONTAINS
     ! emissions time step here.
     !=======================================================================
     IF ( DoTend ) THEN
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*)   &
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*)   &
                            ' --- Add emissions and drydep to tracers'
        CALL MAPL_TimerOn( STATE, 'GC_FLUXES' )
 
@@ -1363,11 +1363,11 @@ CONTAINS
        _ASSERT(RC==GC_SUCCESS, 'Error calling DO_TEND')
 
        ! testing only
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*)   &
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*)   &
                                  '     Tendency time step [s]: ', DT
 
        CALL MAPL_TimerOff( STATE, 'GC_FLUXES' )
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*)   &
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*)   &
                                  ' --- Fluxes applied to tracers!'
     ENDIF ! Tendencies
 
@@ -1391,9 +1391,9 @@ CONTAINS
    if (Is_Adjoint) & 
    CALL Push_State(State_Chm,S_Pre_Mix,State_Grid%NX,State_Grid%NY,State_Grid%NZ,Input_Opt%NFD)
 
-   if (debug_adjoint) &
-     CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
-         State_Grid, State_Met,State_Chm, trim(Iam) // ' fwd before mixing.', RC)
+!   if (debug_adjoint) &
+!     CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
+!         State_Grid, State_Met,State_Chm, trim(Iam) // ' fwd before mixing.', RC)
 
 #endif  
 
@@ -1402,7 +1402,7 @@ CONTAINS
    
 
 
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Do turbulence now'
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Do turbulence now'
        CALL MAPL_TimerOn( STATE, 'GC_TURB' )
 
        ! Only do the following for the non-local PBL mixing
@@ -1433,7 +1433,7 @@ CONTAINS
  
 
        CALL MAPL_TimerOff( STATE, 'GC_TURB' )
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Turbulence done!'
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Turbulence done!'
     ENDIF
 
     ! Set tropospheric CH4 concentrations and fill species array with
@@ -1454,7 +1454,7 @@ CONTAINS
     ! 5. Chemistry
     !=======================================================================
     IF ( DoChem ) THEN
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Do chemistry now'
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Do chemistry now'
        CALL MAPL_TimerOn( STATE, 'GC_CHEM' )
 
        IF ( Input_Opt%ITS_A_FULLCHEM_SIM ) THEN
@@ -1487,7 +1487,7 @@ CONTAINS
        _ASSERT(RC==GC_SUCCESS, 'Error calling Do_Chemistr')
 
        CALL MAPL_TimerOff( STATE, 'GC_CHEM' )
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Chemistry done!'
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Chemistry done!'
 
        ! Optional memory prints (level >= 3)
        if ( MemDebugLevel > 0 ) THEN
@@ -1504,7 +1504,7 @@ CONTAINS
     ! 6. Wet deposition
     !=======================================================================
     IF ( DoWetDep ) THEN
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Do wetdep now'
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Do wetdep now'
        CALL MAPL_TimerOn( STATE, 'GC_WETDEP' )
 
        ! Do wet deposition
@@ -1513,7 +1513,7 @@ CONTAINS
        _ASSERT(RC==GC_SUCCESS, 'Error calling DO_WETDEP')
 
        CALL MAPL_TimerOff( STATE, 'GC_WETDEP' )
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Wetdep done!'
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Wetdep done!'
     ENDIF
 
     !=======================================================================
@@ -1742,9 +1742,9 @@ CONTAINS
    if (Is_Adjoint) & 
    CALL Push_State(State_Chm,S_End,State_Grid%NX,State_Grid%NY,State_Grid%NZ,Input_Opt%NFD)
  
-      if (debug_adjoint) &
-     CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
-         State_Grid, State_Met,State_Chm, trim(Iam) // ' fwd end.', RC)
+!      if (debug_adjoint) &
+!     CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
+!         State_Grid, State_Met,State_Chm, trim(Iam) // ' fwd end.', RC)
 
 #endif  
 
@@ -1780,12 +1780,12 @@ CONTAINS
       CALL Pop_State(S_Pre_Mix,State_Chm,Input_Opt%NFD)
       
       
-     if (debug_adjoint) &
-     CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
-         State_Grid, State_Met,State_Chm, trim(Iam) // ' adjoint befor mixing.', RC)
+!     if (debug_adjoint) &
+!     CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
+!         State_Grid, State_Met,State_Chm, trim(Iam) // ' adjoint befor mixing.', RC)
       
       
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Do adjoint turbulence now'
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Do adjoint turbulence now'
        CALL MAPL_TimerOn( STATE, 'GC_TURB_ADJ' )
 
        ! Only do the following for the non-local PBL mixing
@@ -1814,7 +1814,7 @@ CONTAINS
        _ASSERT(RC==GC_SUCCESS, 'Error calling adjoint DO_MIXING')
 
        CALL MAPL_TimerOff( STATE, 'GC_TURB_ADJ' )
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' ---  Adjoint turbulence done!'
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' ---  Adjoint turbulence done!'
    
 
    ENDIF
@@ -1829,12 +1829,12 @@ CONTAINS
     
     CALL Pop_State(S_Pre_Conv,State_Chm,Input_Opt%NFD)
     
-   if (debug_adjoint) &
-     CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
-         State_Grid, State_Met,State_Chm, trim(Iam) // ' adjoint before conv.', RC)
+!   if (debug_adjoint) &
+!     CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
+!         State_Grid, State_Met,State_Chm, trim(Iam) // ' adjoint before conv.', RC)
       
     
-    if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Do adjoint convection now'
+    if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Do adjoint convection now'
        CALL MAPL_TimerOn( STATE, 'GC_CONV_ADJ' )
 
        CALL DO_CONVECTION ( Input_Opt, State_Chm, State_Diag, &
@@ -1842,7 +1842,7 @@ CONTAINS
        _ASSERT(RC==GC_SUCCESS, 'Error calling DO_CONVECTION')
 
        CALL MAPL_TimerOff( STATE, 'GC_CONV_ADJ' )
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Adjoint convection done!'
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Adjoint convection done!'
  
 
     ENDIF
@@ -1884,9 +1884,9 @@ ENDIF
 
   CALL Pop_State(S_End,State_Chm,Input_Opt%NFD)
 
-   if (debug_adjoint) &
-     CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
-         State_Grid, State_Met,State_Chm, trim(Iam) // ' adjoint at the end.', RC)
+!   if (debug_adjoint) &
+!     CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
+!         State_Grid, State_Met,State_Chm, trim(Iam) // ' adjoint at the end.', RC)
 
    IF ( DoEmis ) THEN
       ! get the corresponding index from the mapping of NFD to advect slot
@@ -1945,7 +1945,7 @@ ENDIF ! IF (Is_Adjoint) THEN
 
 
 
-   if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Do diagnostics now'
+   if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Do diagnostics now'
     CALL MAPL_TimerOn( STATE, 'GC_DIAGN' )
 
     ! Set certain diagnostics dependent on state at end of step. This
@@ -1976,8 +1976,8 @@ ENDIF ! IF (Is_Adjoint) THEN
              if (Input_Opt%IS_FD_SPOT_THIS_PET .and. Input_opt%IFD > 0) THEN
        DO N = 1, State_Chm%nSpecies
           ThisSpc => State_Chm%SpcData(N)%Info
-          write(*,*) 'SpcAdj(', TRIM(thisSpc%Name), ') = ',  &
-                State_Chm%SpeciesAdj(Input_Opt%IFD,Input_Opt%JFD,Input_Opt%LFD,N)
+!          write(*,*) 'SpcAdj(', TRIM(thisSpc%Name), ') = ',  &
+!                State_Chm%SpeciesAdj(Input_Opt%IFD,Input_Opt%JFD,Input_Opt%LFD,N)
        ENDDO
        ENDIF
     !=======================================================================
@@ -1997,8 +1997,8 @@ ENDIF ! IF (Is_Adjoint) THEN
          !      ( AIRMW / State_Chm%SpcData(N)%Info%MW_g )
 
            if (Input_Opt%IS_FD_SPOT_THIS_PET .and. Input_Opt%IFD > 0) THEN
-             write(*,*) 'After conversion ',  &
-              State_Chm%SpeciesAdj(Input_Opt%IFD,Input_Opt%JFD,Input_Opt%LFD,N)
+!             write(*,*) 'After conversion ',  &
+!              State_Chm%SpeciesAdj(Input_Opt%IFD,Input_Opt%JFD,Input_Opt%LFD,N)
           ENDIF
        ENDDO
 
@@ -2011,7 +2011,7 @@ ENDIF ! IF (Is_Adjoint) THEN
 #endif
 
     CALL MAPL_TimerOff( STATE, 'GC_DIAGN' )
-    if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Diagnostics done!'
+    if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Diagnostics done!'
 
 
     ! Adjoint Concentration will be multiplied with M_air/M_CO2 
@@ -2033,7 +2033,7 @@ ENDIF ! IF (Is_Adjoint) THEN
     !=======================================================================
 
     ! testing only
-    IF ( PHASE /= 1 .AND. NCALLS < 10 ) NCALLS = NCALLS + 1
+    IF ( PHASE /= 1 .AND. NCALLS < 3 ) NCALLS = NCALLS + 1
 
     ! First call is done
     FIRST = .FALSE.
