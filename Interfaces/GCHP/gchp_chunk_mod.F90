@@ -706,7 +706,7 @@ CONTAINS
                              day,        dayOfYr,    hour,       minute,     &
                              second,     utc,        hElapsed,   Input_Opt,  &
                              State_Chm,  State_Diag, State_Grid, State_Met,  &
-                             Phase,      IsChemTime, IsRadTime,              &
+                             Phase,      IsChemTime, IsAdjTime,  IsRadTime,  &
 #if defined( MODEL_GEOS )
                              FrstRewind, &
 #endif
@@ -802,6 +802,7 @@ CONTAINS
     REAL*4,         INTENT(IN)    :: hElapsed    ! Elapsed hours
     INTEGER,        INTENT(IN)    :: Phase       ! Run phase (-1, 1 or 2)
     LOGICAL,        INTENT(IN)    :: IsChemTime  ! Time for chemistry?
+    LOGICAL,        INTENT(IN)    :: IsAdjTime   ! Time for adjoint forcing?
     LOGICAL,        INTENT(IN)    :: IsRadTime   ! Time for RRTMG?
 #if defined( MODEL_GEOS )
     LOGICAL,        INTENT(IN)    :: FrstRewind  ! Is it the first rewind?
@@ -1766,10 +1767,13 @@ CONTAINS
      Input_Opt%Is_Adjoint=Is_Adjoint
 
      ! Load OCO-2 adjoint forcing from file and accumulate into SpeciesAdj
-     IF ( DoChem .AND. Input_Opt%ADJOINT_FROM_FILE ) THEN
+     ! Use IsAdjTime (not IsChemTime) so forcing loads even when chemistry is off
+     IF ( IsAdjTime .AND. Input_Opt%ADJOINT_FROM_FILE ) THEN
+        IF (Input_Opt%AmIRoot) WRITE(*,*) 'Loading adjoint forcing at timestep'
         CALL Load_OCO2_Adjoint_Forcing( State_Chm, State_Grid, Input_Opt, &
                                         year, month, day, hour, minute, STATUS )
         _VERIFY(STATUS)
+        IF (Input_Opt%AmIRoot) WRITE(*,*) 'Adjoint forcing loaded successfully'
      ENDIF
 
    !

@@ -2169,6 +2169,7 @@ CONTAINS
     ! Scalars
     LOGICAL                      :: am_I_Root     ! Are we on the root PET?
     LOGICAL                      :: IsChemTime    ! Chemistry alarm proxy
+    LOGICAL                      :: IsAdjTime     ! Adjoint forcing time 
     LOGICAL                      :: IsRadTime     ! Radiation alarm proxy
     LOGICAL                      :: IsRunTime     ! Time to call GEOS-Chem
     LOGICAL                      :: IsTendTime    ! Time to calculate tendencies
@@ -2347,6 +2348,25 @@ CONTAINS
                            INT( Input_Opt%TS_CHEM, ESMF_KIND_I8 ) &
                          ) == 0_ESMF_KIND_I8 )
 
+    ENDIF
+#endif
+
+    ! Compute IsAdjTime independently for adjoint runs, regardless of chemistry setting
+    ! This allows forcing files to be loaded even when chemistry is turned off
+    ! Use TS_DYN (not TS_CHEM) to match the forcing file output frequency
+    IsAdjTime = .FALSE.
+#ifdef ADJOINT
+    IF ( Input_Opt%IS_ADJOINT ) THEN
+       ! Get current clock position and stop time
+       CALL ESMF_ClockGet( CLOCK, currTime=currTime, stopTime=stopTime, __RC__ )
+       ! Elapsed time from forward sim start
+       tsChemInt = currTime - stopTime
+       CALL ESMF_TimeIntervalGet( tsChemInt, s_i8=adj_elapsed_s, __RC__ )
+       ! Check if current time is a multiple of TS_DYN (forcing file frequency)
+       IsAdjTime = ( MOD( adj_elapsed_s, INT( Input_Opt%TS_DYN, ESMF_KIND_I8 ) ) == 0_ESMF_KIND_I8 )
+       IF ( am_I_Root .AND. IsAdjTime ) THEN
+          WRITE(*,'(A,L1,A,I0)') ' IsAdjTime=', IsAdjTime, ' (adj_elapsed_s=', adj_elapsed_s, ')'
+       ENDIF
     ENDIF
 #endif
 
@@ -3144,6 +3164,7 @@ CONTAINS
                                   State_Met  = State_Met,  & ! Meteorology State
                                   Phase      = Phase,      & ! Run phase
                                   IsChemTime = IsChemTime, & ! Time for chem?
+                                  IsAdjTime  = IsAdjTime,  & ! Time for adjoint forcing?
                                   IsRadTime  = IsRadTime,  & ! Time for RRTMG?
 #if defined( MODEL_GEOS )
                                   FrstRewind = FirstRewind,& ! First rewind?
