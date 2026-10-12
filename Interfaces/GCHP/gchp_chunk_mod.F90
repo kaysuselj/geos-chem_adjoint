@@ -891,6 +891,11 @@ CONTAINS
     TYPE(State_Snapshot)           :: S_Pre_Conv,S_Pre_Mix,S_End
     ! Surface-level adjoint saved between the turbulence and convection adjoints
     REAL(fp), ALLOCATABLE          :: SfcAdj_PreConv(:,:)
+    ! Time stamp of the adjoint forcing file (clock time + one step)
+    TYPE(ESMF_Time)                :: frcTime
+    TYPE(ESMF_TimeInterval)        :: frcDt
+    INTEGER                        :: frcYear, frcMonth, frcDay
+    INTEGER                        :: frcHour, frcMinute
     LOGICAL                        :: IS_ADJOINT
     ! whether we print adjoint debugs
     LOGICAL,parameter              :: debug_adjoint = .TRUE.
@@ -1770,10 +1775,26 @@ CONTAINS
 
      ! Load OCO-2 adjoint forcing from file and accumulate into SpeciesAdj
      ! Use IsAdjTime (not IsChemTime) so forcing loads even when chemistry is off
+     ! The call at clock time t runs the adjoint of the forward step from t
+     ! to t+dt, so the adjoint state on entry is valid at t+dt: load the
+     ! forcing file stamped t+dt (observations of the state at t+dt).
      IF ( IsAdjTime .AND. Input_Opt%ADJOINT_FROM_FILE ) THEN
-        IF (Input_Opt%AmIRoot) WRITE(*,*) 'Loading adjoint forcing at timestep'
-        CALL Load_OCO2_Adjoint_Forcing( State_Chm, State_Grid, Input_Opt, &
-                                        year, month, day, hour, minute, STATUS )
+        CALL ESMF_TimeSet( frcTime, yy=year, mm=month, dd=day, h=hour,      &
+                           m=minute, s=second,                              &
+                           calkindflag=ESMF_CALKIND_GREGORIAN, rc=STATUS )
+        _VERIFY(STATUS)
+        CALL ESMF_TimeIntervalSet( frcDt, s=Input_Opt%TS_DYN, rc=STATUS )
+        _VERIFY(STATUS)
+        frcTime = frcTime + frcDt
+        CALL ESMF_TimeGet( frcTime, yy=frcYear, mm=frcMonth, dd=frcDay,     &
+                           h=frcHour, m=frcMinute, rc=STATUS )
+        _VERIFY(STATUS)
+        IF (Input_Opt%AmIRoot) WRITE(*,'(A,I4.4,2I2.2,A,2I2.2,A)')          &
+           ' Loading adjoint forcing stamped ', frcYear, frcMonth, frcDay,  &
+           '_', frcHour, frcMinute, 'z'
+        CALL Load_OCO2_Adjoint_Forcing( State_Chm, State_Grid, Input_Opt,   &
+                                        frcYear, frcMonth, frcDay,          &
+                                        frcHour, frcMinute, STATUS )
         _VERIFY(STATUS)
         IF (Input_Opt%AmIRoot) WRITE(*,*) 'Adjoint forcing loaded successfully'
      ENDIF
