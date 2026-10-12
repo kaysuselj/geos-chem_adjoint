@@ -1916,29 +1916,26 @@ ENDIF
 ! so adjoints map as:
 !   SpeciesAdj_old += SpeciesAdj_new * DP_DRY_PREV / DELP_DRY
 
-   !!!!!
-   ! WE NEED TO DO THE MASS-CONSERVATION HERE !!!!!!
-   !!!! 
-   
-   ! Match forward AIRQNT behavior: only reverse-scale adjoints when
-   ! forward mixing-ratio scaling was applied on this step.
-   !IF ( scaleMR ) THEN
-   !   DO N = 1, State_Chm%nSpecies
-   !      DO L = 1, State_Grid%NZ
-   !         DO J = 1, State_Grid%NY
-   !            DO I = 1, State_Grid%NX
-   !               IF ( State_Met%DELP_DRY(I,J,L) > 0.0_fp ) THEN
-   !                  State_Chm%SpeciesAdj(I,J,L,N) =                           &
-   !                       State_Chm%SpeciesAdj(I,J,L,N) *                      &
-   !                       State_Met%DP_DRY_PREV(I,J,L) / State_Met%DELP_DRY(I,J,L)
-   !               ENDIF
-   !            ENDDO
-    !        ENDDO
-   !      ENDDO
-   !  ENDDO
-   !ENDIF
-
-     
+   ! Adjoint of the forward AIRQNT mixing-ratio update, which is applied
+   ! at the start of the forward step whenever scaleMR is true (FV advection
+   ! off). DELP_DRY is restored from the checkpoint before AIRQNT in adjoint
+   ! mode, so DP_DRY_PREV and DELP_DRY hold the same values as in the
+   ! forward step. It is the first forward operation, hence the last here.
+   IF ( scaleMR ) THEN
+      DO N = 1, State_Chm%nSpecies
+         DO L = 1, State_Grid%NZ
+            DO J = 1, State_Grid%NY
+               DO I = 1, State_Grid%NX
+                  IF ( State_Met%DELP_DRY(I,J,L) > 0.0_fp ) THEN
+                     State_Chm%SpeciesAdj(I,J,L,N) =                           &
+                          State_Chm%SpeciesAdj(I,J,L,N) *                      &
+                          State_Met%DP_DRY_PREV(I,J,L) / State_Met%DELP_DRY(I,J,L)
+                  ENDIF
+               ENDDO
+            ENDDO
+         ENDDO
+      ENDDO
+   ENDIF
 
 ENDIF ! IF (Is_Adjoint) THEN
 

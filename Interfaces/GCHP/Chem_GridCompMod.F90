@@ -2942,6 +2942,22 @@ CONTAINS
           ENDIF
           Ptr2d_R8 => NULL()
        ENDIF
+
+#ifdef ADJOINT
+       ! In adjoint mode the INTERNAL state is refreshed from the checkpoint
+       ! of the matching forward step on every call, so restore DELP_DRY from
+       ! it on every call too (not only the first). AIRQNT then sets
+       ! DP_DRY_PREV to the same value the forward step saw, which the
+       ! adjoint of the mixing-ratio update in gchp_chunk_mod needs.
+       IF ( Input_Opt%IS_ADJOINT .AND. .NOT. FIRST ) THEN
+          CALL MAPL_GetPointer( INTSTATE, Ptr3d_R8, 'DELP_DRY', notFoundOK=.TRUE., __RC__ )
+          IF ( ASSOCIATED(Ptr3d_R8) .AND. ASSOCIATED(State_Met%DELP_DRY) ) THEN
+             State_Met%DELP_DRY(:,:,1:State_Grid%NZ) =       &
+                                  Ptr3d_R8(:,:,State_Grid%NZ:1:-1)
+          ENDIF
+          Ptr3d_R8 => NULL()
+       ENDIF
+#endif
 #endif
 
 #if defined( MODEL_GEOS )
