@@ -614,10 +614,11 @@ END SUBROUTINE Integrate_Srf_Adjoint
   ! by co2_adjoint_forcing.py) and ADD it to State_Chm%SpeciesAdj.
   !
   ! Rank 0 reads the file; n_obs, lat/lon arrays, and the forcing array
-  ! are broadcast to all ranks.  Each rank finds the nearest local cell
-  ! (minimum angular distance) for each obs and accumulates directly into
-  ! SpeciesAdj, without interpolation.  Since cubed-sphere tiles are
-  ! non-overlapping, each obs is accumulated by exactly one rank.
+  ! are broadcast to all ranks.  Each rank finds its nearest local cell
+  ! centre (great-circle distance) for each obs; the rank holding the
+  ! globally nearest centre owns the obs (lowest rank on an exact tie) and
+  ! accumulates it into SpeciesAdj, without interpolation.  Each obs is
+  ! therefore accumulated exactly once, whatever the MPI layout.
   !
   ! Forcing file: CO2_adjoint_forcing_YYYYMMDD_HHMMz.nc4
   !   Dimensions: obs (n_obs), lev (nlev)
@@ -650,12 +651,16 @@ END SUBROUTINE Integrate_Srf_Adjoint
     INTEGER                         :: file_flag
     LOGICAL                         :: file_exists
     INTEGER                         :: I, J, L, K, N
-    INTEGER                         :: best_I, best_J
-    REAL(fp)                        :: obs_lat, obs_lon
-    REAL(fp)                        :: cell_lat, cell_lon, dlon_diff
-    REAL(fp)                        :: dist2, best_dist2, max_dist2
-    ! Tile lat envelope computed from cell centres (YMin/YMax scalars may be unset)
-    REAL(fp)                        :: tile_lat_min, tile_lat_max, cell_size_deg
+    INTEGER                         :: myPet, n_dep_loc, n_dep_glb
+    REAL(f8)                        :: sin_obs, cos_obs, lon_obs_rad
+    REAL(f8)                        :: dist, best_dist
+    REAL(f8), PARAMETER             :: D2R = 3.14159265358979323846_f8 / 180.0_f8
+    ! Local cell centres: sin/cos of latitude and longitude [rad]
+    REAL(f8), ALLOCATABLE           :: sin_lat(:,:), cos_lat(:,:), lon_rad(:,:)
+    ! Per obs: distance to the nearest local centre and its indices, the
+    ! global minimum of that distance, and the owning rank
+    REAL(f8), ALLOCATABLE           :: loc_dist(:), glb_dist(:)
+    INTEGER,  ALLOCATABLE           :: loc_I(:), loc_J(:), cand(:), owner(:)
 
     RC = 0
 
@@ -741,59 +746,87 @@ END SUBROUTINE Integrate_Srf_Adjoint
     forcing_obs(1:nlev, 1:n_obs) => forcing_1d
     N = Input_Opt%NFD
 
-    ! Tile lat envelope from cell centres.  State_Grid%YMin/YMax scalars are
-    ! initialised to 0 and not guaranteed to be set by GCHP, so compute them
-    ! from YMid instead.  Add one cell-width buffer to cover the cell edges.
-    cell_size_deg = 90.0_fp / REAL(State_Grid%NY, fp)
-    tile_lat_min  = MINVAL(State_Grid%YMid(1:State_Grid%NX, 1:State_Grid%NY)) &
-                    - cell_size_deg
-    tile_lat_max  = MAXVAL(State_Grid%YMid(1:State_Grid%NX, 1:State_Grid%NY)) &
-                    + cell_size_deg
+    CALL ESMF_VMGet(vm, localPet=myPet, RC=STATUS)
+    IF (STATUS /= ESMF_SUCCESS) THEN
+       NULLIFY(forcing_obs); DEALLOCATE(lat_obs, lon_obs, forcing_1d); RC = STATUS; RETURN
+    ENDIF
 
-    ! Threshold: squared angular distance (degrees) within which an obs is
-    ! considered "on" this rank's tile.  1.5 × cell_size is tight enough to
-    ! exclude cells on neighbouring faces (which are ≥ one face-width away)
-    ! while large enough to catch all obs interior to this tile.
-    max_dist2 = (1.5_fp * cell_size_deg)**2
+    ALLOCATE(sin_lat(State_Grid%NX, State_Grid%NY), &
+             cos_lat(State_Grid%NX, State_Grid%NY), &
+             lon_rad(State_Grid%NX, State_Grid%NY))
+    ALLOCATE(loc_dist(n_obs), glb_dist(n_obs))
+    ALLOCATE(loc_I(n_obs), loc_J(n_obs), cand(n_obs), owner(n_obs))
 
-    ! Nearest-centre assignment: for each obs within the tile lat envelope,
-    ! find the local cell whose centre is closest.  Accumulate only when the
-    ! squared distance is within max_dist2, ensuring this rank — not a
-    ! neighbouring face — owns the obs.
+    DO J = 1, State_Grid%NY
+    DO I = 1, State_Grid%NX
+       sin_lat(I,J) = SIN(REAL(State_Grid%YMid(I,J), f8) * D2R)
+       cos_lat(I,J) = COS(REAL(State_Grid%YMid(I,J), f8) * D2R)
+       lon_rad(I,J) = REAL(State_Grid%XMid(I,J), f8) * D2R
+    ENDDO; ENDDO
+
+    ! Nearest local cell centre of each obs.  The distance is 1 - cos(arc),
+    ! which is monotonic in the great-circle distance and lies in [0,2].
+    loc_dist = HUGE(1.0_f8)
+    loc_I    = 1
+    loc_J    = 1
     DO K = 1, n_obs
-       obs_lat = REAL(lat_obs(K), fp)
-       obs_lon = REAL(lon_obs(K), fp)
+       sin_obs     = SIN(REAL(lat_obs(K), f8) * D2R)
+       cos_obs     = COS(REAL(lat_obs(K), f8) * D2R)
+       lon_obs_rad = REAL(lon_obs(K), f8) * D2R
 
-       IF (obs_lat < tile_lat_min .OR. obs_lat > tile_lat_max) CYCLE
-
-       best_dist2 = HUGE(1.0_fp)
-       best_I = 1; best_J = 1
-
+       best_dist = HUGE(1.0_f8)
        DO J = 1, State_Grid%NY
        DO I = 1, State_Grid%NX
-          cell_lat  = State_Grid%YMid(I,J)
-          cell_lon  = State_Grid%XMid(I,J)
-          DO WHILE (cell_lon >= 180.0_fp); cell_lon = cell_lon - 360.0_fp; END DO
-          DO WHILE (cell_lon < -180.0_fp); cell_lon = cell_lon + 360.0_fp; END DO
-          dlon_diff = obs_lon - cell_lon
-          IF (dlon_diff >  180.0_fp) dlon_diff = dlon_diff - 360.0_fp
-          IF (dlon_diff < -180.0_fp) dlon_diff = dlon_diff + 360.0_fp
-          dist2 = (obs_lat - cell_lat)**2 + dlon_diff**2
-          IF (dist2 < best_dist2) THEN
-             best_dist2 = dist2
-             best_I = I; best_J = J
+          dist = 1.0_f8 - ( sin_obs * sin_lat(I,J) + &
+                            cos_obs * cos_lat(I,J) * COS(lon_obs_rad - lon_rad(I,J)) )
+          IF (dist < best_dist) THEN
+             best_dist = dist
+             loc_I(K) = I; loc_J(K) = J
           ENDIF
        ENDDO; ENDDO
-
-       IF (best_dist2 <= max_dist2) THEN
-          DO L = 1, MIN(State_Grid%NZ, nlev)
-             State_Chm%SpeciesAdj(best_I,best_J,L,N) = &
-                  State_Chm%SpeciesAdj(best_I,best_J,L,N) + &
-                  REAL(forcing_obs(L,K), fp)
-          ENDDO
-       ENDIF
+       loc_dist(K) = best_dist
     ENDDO
 
+    ! Owner of each obs: the rank with the globally nearest centre.  The
+    ! global minimum is bitwise one of the local values, so the equality
+    ! test is exact; the lowest rank wins a tie.
+    STATUS = ESMF_SUCCESS
+    glb_dist = HUGE(1.0_f8)
+    owner    = HUGE(1)
+    CALL MAPL_CommsAllReduceMin(vm, loc_dist, glb_dist, n_obs, RC=STATUS)
+    IF (STATUS == ESMF_SUCCESS) THEN
+       cand = HUGE(1)
+       WHERE (loc_dist == glb_dist) cand = myPet
+       CALL MAPL_CommsAllReduceMin(vm, cand, owner, n_obs, RC=STATUS)
+    ENDIF
+    IF (STATUS /= ESMF_SUCCESS) THEN
+       NULLIFY(forcing_obs)
+       DEALLOCATE(lat_obs, lon_obs, forcing_1d)
+       DEALLOCATE(sin_lat, cos_lat, lon_rad, loc_dist, glb_dist, loc_I, loc_J, cand, owner)
+       RC = STATUS; RETURN
+    ENDIF
+
+    n_dep_loc = 0
+    DO K = 1, n_obs
+       IF (owner(K) /= myPet) CYCLE
+       ! Skip an obs with no valid distance (e.g. NaN coordinates)
+       IF (.NOT. (glb_dist(K) <= 2.0_f8)) CYCLE
+       DO L = 1, MIN(State_Grid%NZ, nlev)
+          State_Chm%SpeciesAdj(loc_I(K),loc_J(K),L,N) = &
+               State_Chm%SpeciesAdj(loc_I(K),loc_J(K),L,N) + &
+               REAL(forcing_obs(L,K), fp)
+       ENDDO
+       n_dep_loc = n_dep_loc + 1
+    ENDDO
+
+    ! Every obs must have been deposited exactly once
+    n_dep_glb = 0
+    CALL MAPL_CommsAllReduceSum(vm, n_dep_loc, n_dep_glb, 1, RC=STATUS)
+    IF (STATUS == ESMF_SUCCESS .AND. MAPL_AM_I_ROOT(vm)) &
+         WRITE(*,'(A,I0,A,I0)') 'Load_OCO2: obs in file = ', n_obs, &
+                                 ', deposited = ', n_dep_glb
+
+    DEALLOCATE(sin_lat, cos_lat, lon_rad, loc_dist, glb_dist, loc_I, loc_J, cand, owner)
     NULLIFY(forcing_obs)
     DEALLOCATE(lat_obs, lon_obs, forcing_1d)
 
