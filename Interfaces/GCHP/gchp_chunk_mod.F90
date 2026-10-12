@@ -889,6 +889,8 @@ CONTAINS
     ! State variables (i.e. concentrations before processes and at the end)
     ! We need at the end for the remaining processes at the end of time step
     TYPE(State_Snapshot)           :: S_Pre_Conv,S_Pre_Mix,S_End
+    ! Surface-level adjoint saved between the turbulence and convection adjoints
+    REAL(fp), ALLOCATABLE          :: SfcAdj_PreConv(:,:)
     LOGICAL                        :: IS_ADJOINT
     ! whether we print adjoint debugs
     LOGICAL,parameter              :: debug_adjoint = .TRUE.
@@ -1819,11 +1821,21 @@ CONTAINS
 
        CALL MAPL_TimerOff( STATE, 'GC_TURB_ADJ' )
        if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' ---  Adjoint turbulence done!'
-   
+
 
    ENDIF
-     
-     
+
+   ! The forward step adds the surface flux after convection and before
+   ! mixing (DO_TEND inside DO_MIXING). Its adjoint therefore needs the
+   ! surface-level adjoint as it is here: after the turbulence adjoint and
+   ! before the convection adjoint. Save it for Integrate_Srf_Adjoint.
+   IF ( DoEmis ) THEN
+      IF ( ALLOCATED( SfcAdj_PreConv ) ) DEALLOCATE( SfcAdj_PreConv )
+      ALLOCATE( SfcAdj_PreConv( State_Grid%NX, State_Grid%NY ) )
+      SfcAdj_PreConv = State_Chm%SpeciesAdj(:,:,1,Input_Opt%NFD)
+   ENDIF
+
+
     !
     ! 2. CONVECTION
     !
@@ -1908,7 +1920,8 @@ ENDIF
       ! the Integrate_Srf_Adjoint call will be every chemistry time step therefore dt = Input_Opt%TS_CHEM
       CALL Integrate_Srf_Adjoint( Input_Opt, State_Chm, State_Grid, State_Met, &
                                   State_Chm%SurfaceFlux(:,:,AdjSfluxNA),      &
-                      REAL( Input_Opt%TS_CHEM, fp )                )
+                      REAL( Input_Opt%TS_CHEM, fp ), SfcAdj_PreConv )
+      DEALLOCATE( SfcAdj_PreConv )
    ENDIF
 
 ! Reverse of AIRQNT mixing-ratio update:
