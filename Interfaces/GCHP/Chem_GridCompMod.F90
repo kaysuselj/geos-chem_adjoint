@@ -75,6 +75,9 @@ MODULE Chem_GridCompMod
 ! !PUBLIC MEMBER FUNCTIONS:
 !
   PUBLIC   :: SetServices    ! Sets ESMF entry points
+#ifdef ADJOINT
+  PUBLIC   :: Adjoint_RefreshExports ! History copy of the adjoint after advection
+#endif
 !
 ! !PRIVATE MEMBER FUNCTIONS:
 !
@@ -4281,6 +4284,49 @@ CONTAINS
   END SUBROUTINE Extract_
 !EOC
 #ifdef ADJOINT
+   ! Refresh the History copy of the adjoint tracers from the internal state.
+   ! The parent calls this after the advection adjoint, so that the record at
+   ! clock time t holds the adjoint after the whole step (physics and advection).
+   ! Without it History writes the diagnostic archived inside GEOS-Chem, which
+   ! lacks the advection adjoint of that step.
+   subroutine Adjoint_RefreshExports( RC )
+
+     USE PhysConstants, ONLY : AIRMW
+
+     integer, intent(out) :: RC
+
+     integer                    :: I, N, S, STATUS
+     character(len=ESMF_MAXSTR) :: Iam
+
+     Iam = "Adjoint_RefreshExports"
+     RC  = ESMF_SUCCESS
+
+     IF ( .NOT. Input_Opt%Is_Adjoint )            RETURN
+     IF ( .NOT. ASSOCIATED(Int2Adj) )             RETURN
+     IF ( .NOT. State_Diag%Archive_SpeciesAdj )   RETURN
+
+     ! Internal state is top-down, the diagnostic is surface-first. The
+     ! diagnostic is archived in gchp_chunk_mod while the species are in
+     ! kg/kg dry; the internal state holds the adjoint after the conversion
+     ! back to mol/mol, which multiplies it by AIRMW / MW_g (unitconv_mod).
+     DO S = 1, State_Diag%Map_SpeciesAdj%nSlots
+        N = State_Diag%Map_SpeciesAdj%slot2id(S)
+        DO I = 1, SIZE(Int2Adj,1)
+           IF ( Int2Adj(I)%ID /= N ) CYCLE
+           State_Diag%SpeciesAdj(:,:,:,S) =                                  &
+                Int2Adj(I)%Internal(:,:,State_Grid%NZ:1:-1) *                &
+                ( State_Chm%SpcData(N)%Info%MW_g / AIRMW )
+        ENDDO
+     ENDDO
+
+     CALL CopyGCStates2Exports( MAPL_Am_I_Root(), Input_Opt, HistoryConfig,  &
+                                STATUS )
+     _VERIFY(STATUS)
+
+     _RETURN(ESMF_SUCCESS)
+
+   end subroutine Adjoint_RefreshExports
+
    subroutine Adjoint_StateRecord( GC, IMPORT, EXPORT, CLOCK, RC )
 
      ! !ARGUMENTS:
