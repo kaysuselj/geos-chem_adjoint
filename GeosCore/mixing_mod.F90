@@ -107,6 +107,9 @@ CONTAINS
     ! Set OnlyAbovePBL flag (used below by DO_TEND) to indicate that
     ! fluxes within the PBL have already been applied.
     ! ----------------------------------------------------------------------
+    !print *,'Kay,turbulence options, LTURB and LNLPBL'
+    !print *, Input_Opt%LTURB, Input_Opt%LNLPBL
+    
     IF ( Input_Opt%LTURB .AND. Input_Opt%LNLPBL ) THEN
 
        !--------------------------------------------------------------------
@@ -118,7 +121,8 @@ CONTAINS
        ! it is now, then we will have stored drydep fluxes up to that height,
        ! so we need to zero these out.)
        !--------------------------------------------------------------------
-
+        
+       !print *,'Kay, do_vdiff'
        ! Non-local mixing
        CALL Do_Vdiff( Input_Opt,  State_Chm, State_Diag,                     &
                       State_Grid, State_Met, RC                             )
@@ -168,6 +172,7 @@ CONTAINS
     !-----------------------------------------------------------------------
     IF ( Input_Opt%LTURB .AND. .NOT. Input_Opt%LNLPBL ) THEN
 
+      ! print *,'Kay, full PBL mixing'     
        ! Full PBL mixing
        CALL Do_Full_Pbl_Mixing( Input_Opt,  State_Chm, State_Diag,            &
                                 State_Grid, State_Met, RC                    )
@@ -346,15 +351,7 @@ CONTAINS
        ENDIF
     ENDIF
 
-#if defined( ADJOINT )  && defined ( DEBUG )
-    IF (Input_Opt%is_adjoint .and. Input_Opt%IS_FD_SPOT_THIS_PET) THEN
-       WRITE(*,*) ' SpcAdj(IFD,JFD) before unit converstion: ',  &
-            State_Chm%SpeciesAdj(Input_Opt%IFD, Input_Opt%JFD, &
-            Input_Opt%LFD, Input_Opt%NFD)
-       WRITE(*,*) ' Spc(IFD,JFD) before unit converstion: ',  &
-            State_Chm%Species(Input_Opt%NFD)%Conc(Input_Opt%IFD, Input_Opt%JFD, Input_Opt%LFD)
-    ENDIF
-#endif
+
 
     ! Halt mixing timer (so that unit conv can be timed separately)
     IF ( Input_Opt%useTimers ) THEN
@@ -386,15 +383,7 @@ CONTAINS
        CALL Timer_Start( "Boundary layer mixing", RC )
     ENDIF
     
-#if defined( ADJOINT )  && defined ( DEBUG )
-    IF (Input_Opt%is_adjoint .and. Input_Opt%IS_FD_SPOT_THIS_PET) THEN
-       WRITE(*,*) ' SpcAdj(IFD,JFD) after unit converstion: ',  &
-            State_Chm%SpeciesAdj(Input_Opt%IFD, Input_Opt%JFD, &
-            Input_Opt%LFD, Input_Opt%NFD)
-       WRITE(*,*) ' Spc(IFD,JFD) after unit converstion: ',  &
-            State_Chm%Species(Input_Opt%NFD)%Conc(Input_Opt%IFD, Input_Opt%JFD, Input_Opt%LFD)
-    ENDIF
-#endif
+
 
     ! Trap potential error
     IF ( RC /= GC_SUCCESS ) THEN
@@ -765,15 +754,7 @@ CONTAINS
 
                    ! Flux: [kg/m2] = [kg m-2 s-1 ] x [s]
                    FLUX = TMP * TS
-#ifdef ADJOINT
-                   IF ( I .eq. Input_Opt%IFD .and. J .eq. Input_Opt%JFD .and. &
-                        L .eq. Input_Opt%LFD .and. N .eq. Input_Opt%NFD) THEN
-                      WRITE(*,*) ' GetHcoVal(IFD,JFD) = ', TMP,  ' FLUX = ', FLUX
-                      IF ( Input_Opt%is_adjoint ) THEN
-                         WRITE(*,*) ' SpeciesAdj(FD) = ', State_Chm%SpeciesAdj(I,J,L,N)
-                      ENDIF
-                   ENDIF
-#endif
+
 
                    ! Add to species array
                    State_Chm%Species(N)%Conc(I,J,L) = &
@@ -820,16 +801,6 @@ CONTAINS
 
     ENDDO !N
 
-#if defined( ADJOINT )  && defined ( DEBUG )
-    IF (Input_Opt%is_adjoint .and. Input_Opt%IS_FD_SPOT_THIS_PET) THEN
-       WRITE(*,*) ' SpcAdj(IFD,JFD) before unit converstion: ',  &
-            State_Chm%SpeciesAdj(Input_Opt%IFD, Input_Opt%JFD, &
-            Input_Opt%LFD, Input_Opt%NFD)
-       WRITE(*,*) ' Spc(IFD,JFD) before unit converstion: ',  &
-            State_Chm%Species(Input_Opt%NFD)%Conc(Input_Opt%IFD, Input_Opt%JFD, Input_Opt%LFD)
-    ENDIF
-
-#endif
 
     ! Halt mixing timer (so that unit conv can be timed separately)
     IF ( Input_Opt%useTimers ) THEN
@@ -857,16 +828,6 @@ CONTAINS
        CALL Timer_Start( "Boundary layer mixing", RC )
     ENDIF
 
-#if defined( ADJOINT )  && defined ( DEBUG )
-    IF (Input_Opt%is_adjoint .and. Input_Opt%IS_FD_SPOT_THIS_PET) THEN
-       WRITE(*,*) ' SpcAdj(IFD,JFD) after unit converstion: ',  &
-            State_Chm%SpeciesAdj(Input_Opt%IFD, Input_Opt%JFD, &
-            Input_Opt%LFD, Input_Opt%NFD)
-       WRITE(*,*) ' Spc(IFD,JFD) after unit converstion: ',  &
-            State_Chm%Species(Input_Opt%NFD)%Conc(Input_Opt%IFD, Input_Opt%JFD, Input_Opt%LFD)
-    ENDIF
-
-#endif
 
     !------------------------------------------------------------------------
     ! Emissions/dry deposition budget diagnostics - Part 2 of 2

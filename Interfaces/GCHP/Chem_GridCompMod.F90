@@ -71,12 +71,16 @@ MODULE Chem_GridCompMod
   USE PHYSCONSTANTS
 #endif
 
+
   IMPLICIT NONE
   PRIVATE
 !
 ! !PUBLIC MEMBER FUNCTIONS:
 !
   PUBLIC   :: SetServices    ! Sets ESMF entry points
+#ifdef ADJOINT
+  PUBLIC   :: Adjoint_RefreshExports ! History copy of the adjoint after advection
+#endif
 !
 ! !PRIVATE MEMBER FUNCTIONS:
 !
@@ -1073,6 +1077,19 @@ CONTAINS
 #   include "GCHPchem_ExportSpec___.h"
 #endif
 
+#ifdef ADJOINT
+   ! Dedicated export for AdvCore density scaling (independent of HISTORY.rc)
+   CALL MAPL_AddExportSpec(GC,                                    &
+       SHORT_NAME = 'ADV_AIRDEN',                                &
+       LONG_NAME  = 'dry_air_density_for_advection',             &
+       UNITS      = 'kg m-3',                                    &
+       PRECISION  = ESMF_KIND_R8,                                &
+       DIMS       = MAPL_DimsHorzVert,                           &
+       VLOCATION  = MAPL_VLocationCenter,                        &
+       RC=STATUS )
+   _VERIFY(STATUS)
+#endif
+
     ! Read HISTORY config file and add exports for unique items
     CALL ESMF_ConfigGetAttribute( myState%myCF, HistoryConfigFile, &
                                   Label="HISTORY_CONFIG:",         &
@@ -1690,8 +1707,7 @@ CONTAINS
        DO I = 1, nFlds
 
           ! Get info about this species from the species database
-          N = State_Chm%Map_Advect(I)
-          ThisSpc => State_Chm%SpcData(N)%Info
+          ThisSpc => State_Chm%SpcData(I)%Info
 
           ! Pass tracer name
           Int2Adj(I)%Name = TRIM(ThisSpc%Name)
@@ -2223,6 +2239,7 @@ CONTAINS
     ! Scalars
     LOGICAL                      :: am_I_Root     ! Are we on the root PET?
     LOGICAL                      :: IsChemTime    ! Chemistry alarm proxy
+    LOGICAL                      :: IsAdjTime     ! Adjoint forcing time 
     LOGICAL                      :: IsRadTime     ! Radiation alarm proxy
     LOGICAL                      :: IsRunTime     ! Time to call GEOS-Chem
     LOGICAL                      :: IsTendTime    ! Time to calculate tendencies
@@ -2328,7 +2345,12 @@ CONTAINS
     CHARACTER(len=ESMF_MAXSTR)   :: timestring1, timestring2
 #ifdef ADJOINT
     LOGICAL                      :: isStartTime
+   LOGICAL                      :: ForceAdjointInitRun
+   REAL(ESMF_KIND_R8)           :: AdjLocalSum
+   REAL(ESMF_KIND_R8)           :: AdjGlobalSum
+   INTEGER                      :: AdjCO2_ID
     REAL(ESMF_KIND_r8), POINTER  :: CostFuncMask(:,:,:) => NULL()
+    INTEGER(ESMF_KIND_I8)        :: adj_elapsed_s  ! Elapsed sim seconds for adjoint alarm check
 #endif
 #ifdef JACOBIAN
     INTEGER                      :: primarySpcId
@@ -2370,6 +2392,57 @@ CONTAINS
     ! ----------------------------------------------------------------------
     CALL MAPL_Get(STATE, RUNALARM=ALARM, __RC__)
     IsChemTime = ESMF_AlarmIsRinging(ALARM, __RC__)
+
+#ifdef ADJOINT
+    ! ESMF alarms do not ring on a reversed clock. In adjoint mode, manually
+    ! determine IsChemTime by checking whether the elapsed time from the
+    ! simulation start is a multiple of TS_CHEM, replicating the forward-run
+    ! alarm schedule at the same absolute times.
+    IF ( Input_Opt%IS_ADJOINT ) THEN
+
+       ! Validate TS_CHEM is an integer multiple of TS_DYN
+       IF ( MOD( Input_Opt%TS_CHEM, Input_Opt%TS_DYN ) /= 0 ) THEN
+          IF ( am_I_Root ) WRITE(*,*) 'ERROR: TS_CHEM must be a multiple of ' // &
+               'TS_DYN in adjoint mode. TS_CHEM=', Input_Opt%TS_CHEM,            &
+               ' TS_DYN=', Input_Opt%TS_DYN
+          STATUS = GC_FAILURE
+          _VERIFY(STATUS)
+       ENDIF
+
+       ! Get current clock position and stop time (= forward sim start = T_start)
+       CALL ESMF_ClockGet( CLOCK, currTime=currTime, stopTime=stopTime, __RC__ )
+
+       ! Elapsed time from forward sim start to current adjoint clock position:
+       !   elapsed = currTime - stopTime = (T_end - k*TS_DYN) - T_start
+       tsChemInt = currTime - stopTime
+       CALL ESMF_TimeIntervalGet( tsChemInt, s_i8=adj_elapsed_s, __RC__ )
+
+       ! Ring at the same absolute times as the forward run
+       IsChemTime = ( MOD( adj_elapsed_s,                          &
+                           INT( Input_Opt%TS_CHEM, ESMF_KIND_I8 ) &
+                         ) == 0_ESMF_KIND_I8 )
+
+    ENDIF
+#endif
+
+    ! Compute IsAdjTime independently for adjoint runs, regardless of chemistry setting
+    ! This allows forcing files to be loaded even when chemistry is turned off
+    ! Use TS_DYN (not TS_CHEM) to match the forcing file output frequency
+    IsAdjTime = .FALSE.
+#ifdef ADJOINT
+    IF ( Input_Opt%IS_ADJOINT ) THEN
+       ! Get current clock position and stop time
+       CALL ESMF_ClockGet( CLOCK, currTime=currTime, stopTime=stopTime, __RC__ )
+       ! Elapsed time from forward sim start
+       tsChemInt = currTime - stopTime
+       CALL ESMF_TimeIntervalGet( tsChemInt, s_i8=adj_elapsed_s, __RC__ )
+       ! Check if current time is a multiple of TS_DYN (forcing file frequency)
+       IsAdjTime = ( MOD( adj_elapsed_s, INT( Input_Opt%TS_DYN, ESMF_KIND_I8 ) ) == 0_ESMF_KIND_I8 )
+       IF ( am_I_Root .AND. IsAdjTime ) THEN
+          WRITE(*,'(A,L1,A,I0)') ' IsAdjTime=', IsAdjTime, ' (adj_elapsed_s=', adj_elapsed_s, ')'
+       ENDIF
+    ENDIF
+#endif
 
     ! if (am_I_Root) WRITE(*,*) ' Chem clock is reverse? ', ESMF_ClockIsReverse(CLOCK)
     ! Turn off alarm: only if it was on and this is phase 2 (don't turn off
@@ -2447,9 +2520,22 @@ CONTAINS
 
 #ifdef ADJOINT
     if (Input_Opt%is_adjoint .and. first) THEN
-       ! the forward model doesn't actually trigger on the final
-       ! timestep, so we should skip the first one
-       IsRunTime = .false.
+       ! In transport-only adjoint runs, no GEOS-Chem operator may ever
+       ! trigger GCHP_Chunk_Run, so force one first entry to seed the
+       ! adjoint state. Otherwise preserve the existing first-step skip.
+       ForceAdjointInitRun = .NOT. ( Input_Opt%LCONV .OR. Input_Opt%LTURB .OR. &
+                                     Input_Opt%LWETD .OR. Input_Opt%LCHEM .OR. &
+                                     Input_Opt%LDRYD )
+       IF ( ForceAdjointInitRun ) THEN
+          IsRunTime = .TRUE.
+          IF ( am_I_Root ) THEN
+             WRITE(*,*) '  Forcing first GCC call for adjoint initialization in transport-only mode'
+          ENDIF
+       ELSE
+          ! The forward model doesn't actually trigger on the final
+          ! timestep, so we should skip the first one.
+          IsRunTime = .FALSE.
+       ENDIF
     end if
 #endif
     ! Is it time to update tendencies?
@@ -2515,6 +2601,32 @@ CONTAINS
     RunningGEOSChem: IF(IsRunTime .OR. FIRST) THEN
 
        CALL MAPL_TimerOn(STATE, "RUN"  )
+
+#ifdef ADJOINT
+       ! Diagnostic: read Int2Adj%Internal directly before any refresh/copy,
+       ! to see whether the between-call drop happens before or after Adjoint_StateRefresh.
+       IF ( Input_Opt%IS_ADJOINT .AND. ASSOCIATED(Int2Adj) ) THEN
+          AdjCO2_ID   = IND_('CO2')
+          AdjLocalSum = 0.0_ESMF_KIND_R8
+          IF ( AdjCO2_ID > 0 ) THEN
+             DO I = 1, SIZE(Int2Adj,1)
+                IF ( Int2Adj(I)%ID == AdjCO2_ID .AND. ASSOCIATED(Int2Adj(I)%Internal) ) THEN
+                   AdjLocalSum = SUM( REAL( Int2Adj(I)%Internal(:,:,:), ESMF_KIND_R8 ) )
+                   EXIT
+                ENDIF
+             ENDDO
+          ENDIF
+          call ESMF_VMGetCurrent(VM, RC=STATUS)
+          _VERIFY(STATUS)
+          call MAPL_CommsAllReduceSum(VM, sendbuf=AdjLocalSum, recvbuf=AdjGlobalSum, &
+                                      cnt=1, RC=STATUS)
+          _VERIFY(STATUS)
+          IF ( am_I_Root ) THEN
+             WRITE(*,*) 'ADJ_CO2_SUM [at_entry_int2adj] phase=', Phase,        &
+                        ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+          ENDIF
+       ENDIF
+#endif
 
        ! Get various parameters from the ESMF/MAPL framework
        CALL Extract_( GC,                   &  ! Ref to this Gridded Component
@@ -2629,6 +2741,15 @@ CONTAINS
              IF (Input_opt%IS_ADJOINT) THEN
                 call WRITE_PARALLEL('  Resetting state from checkpoint file')
                 ! call MAPL_GenericRefresh(GC, Import, Export, Clock, RC)
+                
+
+                if ( Input_Opt%amIRoot) THEN    
+                        print *,'Kay, before refresh, species:',State_Chm%SpcData(3)%Info%Name
+                        print *,'Kay before refresh',Int2Spc(3)%Internal(6,5,State_Grid%NZ)
+                        ! print *,'Kay before refresh,1',State_Chm%Species(Int2Spc(3)%ID)%Conc(6,5,1)
+                endif
+                
+
                 call Adjoint_StateRefresh( GC, IMPORT, EXPORT, CLOCK, RC )
                 ! Loop over all species and get info from spc db
                 DO N = 1, State_Chm%nSpecies
@@ -2638,15 +2759,45 @@ CONTAINS
                    IND = IND_( TRIM(ThisSpc%Name ) )
                    IF ( IND < 0 ) CYCLE
                    ! Get data from internal state and copy to species array
-                   CALL MAPL_GetPointer( INTERNAL, Ptr3D_R8, TRIM(SPFX) //          &
-                        TRIM(ThisSpc%Name), notFoundOK=.TRUE.,     &
-                        __RC__ )
-                   State_Chm%Species(IND)%Conc(:,:,:) = &
-                                 Ptr3D_R8(:,:,State_Grid%NZ:1:-1)
+                   State_Chm%Species(Int2Spc(N)%ID)%Conc => &
+                      Int2Spc(N)%Internal(:,:,State_Grid%NZ:1:-1)
+                   
                    if ( MAPL_am_I_Root()) WRITE(*,*)                                &
                         'Initialized species from INTERNAL state: ', TRIM(ThisSpc%Name)
 
-                enddo
+                ENDDO
+
+
+                if ( Input_Opt%amIRoot) THEN
+                        print *,'Kay after refresh',Int2Spc(3)%Internal(6,5,State_Grid%NZ)
+                        print *,'Kay Species_ID',Int2Spc(3)%ID
+                        print *,'Kay after refresh,1',State_Chm%Species(Int2Spc(3)%ID)%Conc(6,5,1)
+                endif
+
+                ! Keep SpeciesAdj synchronized with refreshed internal adjoint
+                ! state before any diagnostics or further pre-run logic.
+                DO I = 1, SIZE(Int2Adj,1)
+                   IF ( Int2Adj(I)%ID <= 0 ) CYCLE
+                   State_Chm%SpeciesAdj(:,:,:,Int2Adj(I)%ID) = Int2Adj(I)%Internal
+                ENDDO
+                State_Chm%SpeciesAdj = State_Chm%SpeciesAdj(:,:,State_Grid%NZ:1:-1,:)
+
+                AdjCO2_ID = IND_('CO2')
+                AdjLocalSum = 0.0_ESMF_KIND_R8
+                IF ( AdjCO2_ID > 0 .AND. ASSOCIATED(State_Chm%SpeciesAdj) ) THEN
+                   AdjLocalSum = SUM( REAL( State_Chm%SpeciesAdj(:,:,:,AdjCO2_ID), ESMF_KIND_R8 ) )
+                ENDIF
+                call ESMF_VMGetCurrent(VM, RC=STATUS)
+                _VERIFY(STATUS)
+                call MAPL_CommsAllReduceSum(VM, sendbuf=AdjLocalSum, recvbuf=AdjGlobalSum, &
+                                            cnt=1, RC=STATUS)
+                _VERIFY(STATUS)
+                IF ( am_I_Root ) THEN
+                   WRITE(*,*) 'ADJ_CO2_SUM [after_refresh] phase=', Phase,         &
+                              ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+                ENDIF
+
+
              ELSE
                 call WRITE_PARALLEL('  Recording state to checkpoint file')
                 call Adjoint_StateRecord( GC, IMPORT, EXPORT, CLOCK, RC )
@@ -2681,8 +2832,38 @@ CONTAINS
             State_Chm%SpeciesAdj(:,:,:,Int2Adj(I)%ID) = Int2Adj(I)%Internal
          ENDDO
 
+         AdjCO2_ID = IND_('CO2')
+         AdjLocalSum = 0.0_ESMF_KIND_R8
+         IF ( AdjCO2_ID > 0 .AND. ASSOCIATED(State_Chm%SpeciesAdj) ) THEN
+            AdjLocalSum = SUM( REAL( State_Chm%SpeciesAdj(:,:,:,AdjCO2_ID), ESMF_KIND_R8 ) )
+         ENDIF
+         call ESMF_VMGetCurrent(VM, RC=STATUS)
+         _VERIFY(STATUS)
+         call MAPL_CommsAllReduceSum(VM, sendbuf=AdjLocalSum, recvbuf=AdjGlobalSum, &
+                                     cnt=1, RC=STATUS)
+         _VERIFY(STATUS)
+         IF ( am_I_Root ) THEN
+            WRITE(*,*) 'ADJ_CO2_SUM [after_int2adj_copy] phase=', Phase,        &
+                       ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+         ENDIF
+
          ! Flip in the vertical
          State_Chm%SpeciesAdj = State_Chm%SpeciesAdj( :, :, State_Grid%NZ:1:-1, : )
+
+         AdjCO2_ID = IND_('CO2')
+         AdjLocalSum = 0.0_ESMF_KIND_R8
+         IF ( AdjCO2_ID > 0 .AND. ASSOCIATED(State_Chm%SpeciesAdj) ) THEN
+            AdjLocalSum = SUM( REAL( State_Chm%SpeciesAdj(:,:,:,AdjCO2_ID), ESMF_KIND_R8 ) )
+         ENDIF
+         call ESMF_VMGetCurrent(VM, RC=STATUS)
+         _VERIFY(STATUS)
+         call MAPL_CommsAllReduceSum(VM, sendbuf=AdjLocalSum, recvbuf=AdjGlobalSum, &
+                                     cnt=1, RC=STATUS)
+         _VERIFY(STATUS)
+         IF ( am_I_Root ) THEN
+            WRITE(*,*) 'ADJ_CO2_SUM [after_int2adj_flip] phase=', Phase,        &
+                       ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+         ENDIF
       ENDIF
 #endif
 
@@ -2879,6 +3060,24 @@ CONTAINS
           ENDIF
           Ptr3d_R8 => NULL()
        ENDIF
+
+#ifdef ADJOINT
+       ! In adjoint mode the INTERNAL state is refreshed from the checkpoint
+       ! of the matching forward step on every call, so restore DELP_DRY from
+       ! it on every call. AIRQNT then sets DP_DRY_PREV to the same value the
+       ! forward step saw, which the adjoint of the mixing-ratio update in
+       ! gchp_chunk_mod needs. (14.5.3 restored it on the first call in the
+       ! upstream FIRST block; 14.8.0 removed that block, so the first call
+       ! is included here.)
+       IF ( Input_Opt%IS_ADJOINT ) THEN
+          CALL MAPL_GetPointer( INTSTATE, Ptr3d_R8, 'DELP_DRY', notFoundOK=.TRUE., __RC__ )
+          IF ( ASSOCIATED(Ptr3d_R8) .AND. ASSOCIATED(State_Met%DELP_DRY) ) THEN
+             State_Met%DELP_DRY(:,:,1:State_Grid%NZ) =       &
+                                  Ptr3d_R8(:,:,State_Grid%NZ:1:-1)
+          ENDIF
+          Ptr3d_R8 => NULL()
+       ENDIF
+#endif
 #endif
 
 #if defined( MODEL_GEOS )
@@ -3056,6 +3255,33 @@ CONTAINS
                 ENDIF
 #endif
 
+        
+#ifdef ADJOINT
+            if ( Input_Opt%amIRoot) THEN
+                        print *,'Kay before chunk run',State_Chm%Species(3)%Conc(6,5,1)
+                endif
+#endif
+
+#ifdef ADJOINT
+            IF ( Input_Opt%IS_ADJOINT ) THEN
+               AdjCO2_ID = IND_('CO2')
+               AdjLocalSum = 0.0_ESMF_KIND_R8
+               IF ( AdjCO2_ID > 0 .AND. ASSOCIATED(State_Chm%SpeciesAdj) ) THEN
+                  AdjLocalSum = SUM( REAL( State_Chm%SpeciesAdj(:,:,:,AdjCO2_ID), ESMF_KIND_R8 ) )
+               ENDIF
+               call ESMF_VMGetCurrent(VM, RC=STATUS)
+               _VERIFY(STATUS)
+               call MAPL_CommsAllReduceSum(VM, sendbuf=AdjLocalSum, recvbuf=AdjGlobalSum, &
+                                           cnt=1, RC=STATUS)
+               _VERIFY(STATUS)
+               IF ( am_I_Root ) THEN
+                  WRITE(*,*) 'ADJ_CO2_SUM [before_chunk] phase=', Phase,          &
+                             ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+               ENDIF
+            ENDIF
+#endif
+
+
              ! Run the GEOS-Chem column chemistry code for the given phase
              CALL GCHP_Chunk_Run( GC         = GC,         & ! Grid comp ref.
                                   nymd       = nymd,       & ! Current YYYYMMDD
@@ -3076,6 +3302,7 @@ CONTAINS
                                   State_Met  = State_Met,  & ! Meteorology State
                                   Phase      = Phase,      & ! Run phase
                                   IsChemTime = IsChemTime, & ! Time for chem?
+                                  IsAdjTime  = IsAdjTime,  & ! Time for adjoint forcing?
                                   IsRadTime  = IsRadTime,  & ! Time for RRTMG?
 #if defined( MODEL_GEOS )
                                   FrstRewind = FirstRewind,& ! First rewind?
@@ -3086,6 +3313,25 @@ CONTAINS
                                   __RC__                  )  ! Success or fail?
 
              CALL MAPL_TimerOff(STATE, "DO_CHEM")
+
+#ifdef ADJOINT
+             IF ( Input_Opt%IS_ADJOINT ) THEN
+                AdjCO2_ID = IND_('CO2')
+                AdjLocalSum = 0.0_ESMF_KIND_R8
+                IF ( AdjCO2_ID > 0 .AND. ASSOCIATED(State_Chm%SpeciesAdj) ) THEN
+                   AdjLocalSum = SUM( REAL( State_Chm%SpeciesAdj(:,:,:,AdjCO2_ID), ESMF_KIND_R8 ) )
+                ENDIF
+                call ESMF_VMGetCurrent(VM, RC=STATUS)
+                _VERIFY(STATUS)
+                call MAPL_CommsAllReduceSum(VM, sendbuf=AdjLocalSum, recvbuf=AdjGlobalSum, &
+                                            cnt=1, RC=STATUS)
+                _VERIFY(STATUS)
+                IF ( am_I_Root ) THEN
+                   WRITE(*,*) 'ADJ_CO2_SUM [after_chunk] phase=', Phase,           &
+                              ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+                ENDIF
+             ENDIF
+#endif
 
 #if !defined( MODEL_GEOS )
              ! Optional memory prints (level >= 2)
@@ -3185,10 +3431,25 @@ CONTAINS
           State_Chm%SpeciesAdj = State_Chm%SpeciesAdj(:,:,State_Grid%NZ:1:-1,:)
 
           DO I = 1, SIZE(Int2Adj,1)
-             WRITE(*,*) 'Copying adjoint ', Int2Adj(I)%ID, ' to ', I
+          !   WRITE(*,*) 'Copying adjoint ', Int2Adj(I)%ID, ' to ', I
              IF ( Int2Adj(I)%ID <= 0 ) CYCLE
              Int2Adj(I)%Internal = State_Chm%SpeciesAdj(:,:,:,Int2Adj(I)%ID)
           ENDDO
+
+          AdjCO2_ID = IND_('CO2')
+          AdjLocalSum = 0.0_ESMF_KIND_R8
+          IF ( AdjCO2_ID > 0 .AND. ASSOCIATED(State_Chm%SpeciesAdj) ) THEN
+             AdjLocalSum = SUM( REAL( State_Chm%SpeciesAdj(:,:,:,AdjCO2_ID), ESMF_KIND_R8 ) )
+          ENDIF
+          call ESMF_VMGetCurrent(VM, RC=STATUS)
+          _VERIFY(STATUS)
+          call MAPL_CommsAllReduceSum(VM, sendbuf=AdjLocalSum, recvbuf=AdjGlobalSum, &
+                                      cnt=1, RC=STATUS)
+          _VERIFY(STATUS)
+          IF ( am_I_Root ) THEN
+             WRITE(*,*) 'ADJ_CO2_SUM [after_afterrun] phase=', Phase,            &
+                        ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+          ENDIF
        ENDIF
 #endif
        CALL MAPL_TimerOff(STATE, "CP_AFTR")
@@ -3321,7 +3582,7 @@ CONTAINS
        ENDIF
        Ptr3d => NULL()
 #endif
-       
+
        ! Stop timer
        ! ----------
        CALL MAPL_TimerOff(STATE, "RUN"  )
@@ -3355,6 +3616,17 @@ CONTAINS
           State_Chm%Species(Int2Spc(I)%ID)%Conc => NULL()
        ENDIF
     ENDDO
+#endif
+
+#ifdef ADJOINT
+   ! Populate dedicated AdvCore density export
+   CALL MAPL_GetPointer( EXPORT, Ptr3d_R8, 'ADV_AIRDEN', &
+             notFoundOK=.TRUE., __RC__ )
+   IF (ASSOCIATED(Ptr3d_R8) .AND. ASSOCIATED(State_Met%AIRDEN)) THEN
+      Ptr3d_R8(:,:,State_Grid%NZ:1:-1) =  &
+            State_Met%AIRDEN(:,:,1:State_Grid%NZ)
+   ENDIF
+   Ptr3d_R8 => NULL()
 #endif
 
     !=======================================================================
@@ -3504,7 +3776,7 @@ CONTAINS
 #endif
 #ifdef ADJOINT
     ! Finite difference test variables
-    INTEGER                        :: IFD, JFD, LFD
+   INTEGER                        :: IFD, JFD, LFD
     REAL*8                         :: CFN
     CHARACTER(len=ESMF_MAXSTR)     :: FD_SPEC
 #endif
@@ -3570,30 +3842,31 @@ CONTAINS
     HcoState%exportState   => EXPORT
 #endif
 
-#ifdef ADJOINT
-    IF (Input_Opt%IS_FD_SPOT_THIS_PET .and. .not. Input_Opt%IS_FD_GLOBAL) THEN
-       FD_SPEC = transfer(state_chm%SpcData(Input_Opt%NFD)%Info%Name, FD_SPEC)
-       IFD = Input_Opt%IFD
-       JFD = Input_Opt%JFD
-       LFD = Input_Opt%LFD
-       NFD = Input_Opt%NFD
-       ! print out the cost function
-       WRITE(*,*) ' Computing final cost function'
-       CFN = 0d0
-       DO L = 1, State_Grid%NZ
-       DO J = 1, State_Grid%NY
-       DO I = 1, State_Grid%NX
-          if (State_Chm%CostFuncMask(I,J,L) > 0d0) THEN
-             WRITE (*, 1047) I, J, L, State_Chm%Species(NFD)%conc(I,J,L)
-             CFN = CFN + State_Chm%Species(NFD)%Conc(I,J,L)
-          endif
-       ENDDO
-        ENDDO
-       ENDDO
-       WRITE(*,'(a7, e22.10)') ' CFN = ', CFN
-1047   FORMAT('  SPC(', i2, ', ', i2, ', ', i2, ') = ', e22.10)
-    ENDIF
-#endif
+!#ifdef ADJOINT
+!    IF (Input_Opt%IS_FD_SPOT_THIS_PET .and. .not. Input_Opt%IS_FD_GLOBAL) THEN
+!       FD_SPEC = transfer(state_chm%SpcData(Input_Opt%NFD)%Info%Name, FD_SPEC)
+!       IFD = Input_Opt%IFD
+!       JFD = Input_Opt%JFD
+!       LFD = Input_Opt%LFD
+!       NFD = Input_Opt%NFD
+!       ! print out the cost function
+!       WRITE(*,*) ' Computing final cost function'
+!
+!       CFN = 0d0
+!       DO L = 1, State_Grid%NZ
+!       DO J = 1, State_Grid%NY
+!       DO I = 1, State_Grid%NX
+!         if (State_Chm%CostFuncMask(I,J,L) > 0d0) THEN
+!             WRITE (*, 1047) I, J, L, State_Chm%Species(NFD)%conc(I,J,L)
+!             CFN = CFN + State_Chm%Species(NFD)%Conc(I,J,L)
+!          endif
+!       ENDDO
+!        ENDDO
+!       ENDDO
+!       WRITE(*,'(a7, e22.10)') ' CFN = ', CFN
+!1047   FORMAT('  SPC(', i2, ', ', i2, ', ', i2, ') = ', e22.10)
+!    ENDIF
+!#endif
 
     ! Finalize HEMCO
     CALL HCOI_GC_FINAL( .FALSE., RC )
@@ -4134,6 +4407,49 @@ CONTAINS
   END SUBROUTINE Extract_
 !EOC
 #ifdef ADJOINT
+   ! Refresh the History copy of the adjoint tracers from the internal state.
+   ! The parent calls this after the advection adjoint, so that the record at
+   ! clock time t holds the adjoint after the whole step (physics and advection).
+   ! Without it History writes the diagnostic archived inside GEOS-Chem, which
+   ! lacks the advection adjoint of that step.
+   subroutine Adjoint_RefreshExports( RC )
+
+     USE PhysConstants, ONLY : AIRMW
+
+     integer, intent(out) :: RC
+
+     integer                    :: I, N, S, STATUS
+     character(len=ESMF_MAXSTR) :: Iam
+
+     Iam = "Adjoint_RefreshExports"
+     RC  = ESMF_SUCCESS
+
+     IF ( .NOT. Input_Opt%Is_Adjoint )            RETURN
+     IF ( .NOT. ASSOCIATED(Int2Adj) )             RETURN
+     IF ( .NOT. State_Diag%Archive_SpeciesAdj )   RETURN
+
+     ! Internal state is top-down, the diagnostic is surface-first. The
+     ! diagnostic is archived in gchp_chunk_mod while the species are in
+     ! kg/kg dry; the internal state holds the adjoint after the conversion
+     ! back to mol/mol, which multiplies it by AIRMW / MW_g (unitconv_mod).
+     DO S = 1, State_Diag%Map_SpeciesAdj%nSlots
+        N = State_Diag%Map_SpeciesAdj%slot2id(S)
+        DO I = 1, SIZE(Int2Adj,1)
+           IF ( Int2Adj(I)%ID /= N ) CYCLE
+           State_Diag%SpeciesAdj(:,:,:,S) =                                  &
+                Int2Adj(I)%Internal(:,:,State_Grid%NZ:1:-1) *                &
+                ( State_Chm%SpcData(N)%Info%MW_g / AIRMW )
+        ENDDO
+     ENDDO
+
+     CALL CopyGCStates2Exports( MAPL_Am_I_Root(), Input_Opt, HistoryConfig,  &
+                                STATUS )
+     _VERIFY(STATUS)
+
+     _RETURN(ESMF_SUCCESS)
+
+   end subroutine Adjoint_RefreshExports
+
    subroutine Adjoint_StateRecord( GC, IMPORT, EXPORT, CLOCK, RC )
 
      ! !ARGUMENTS:
@@ -4190,6 +4506,7 @@ CONTAINS
      FILETYPE = 'pnc4'
      FNAME = 'gcadj_import_checkpoint.' // trim(datestamp) // '.nc4'
 
+
      call MAPL_CheckpointState(IMPORT, CLOCK, &
           FNAME, &
           FILETYPE, STATE, hdr/=0, &
@@ -4231,6 +4548,7 @@ CONTAINS
      type (ESMF_State)                           :: INTERNAL
      integer                                     :: hdr
      integer                                     :: unit
+   logical                                     :: fileExists
 
      character(len=ESMF_MAXSTR)                  :: FNAME, datestamp
 
@@ -4260,6 +4578,14 @@ CONTAINS
 
      FNAME = 'gcadj_import_checkpoint.' // trim(datestamp) // '.nc4'
 
+     INQUIRE(FILE=TRIM(FNAME), EXIST=fileExists)
+     IF ( .NOT. fileExists ) THEN
+        WRITE(*,*) TRIM(Iam)//': Missing adjoint checkpoint file: ', TRIM(FNAME)
+        STATUS = GC_FAILURE
+        _VERIFY(STATUS)
+     ENDIF
+
+
      call MAPL_ESMFStateReadFromFile(IMPORT, CLOCK, &
           FNAME, &
           STATE, .FALSE., RC=STATUS)
@@ -4272,6 +4598,13 @@ CONTAINS
      _VERIFY(STATUS)
 
      FNAME = 'gcadj_internal_checkpoint.' // trim(datestamp) // '.nc4'
+
+     INQUIRE(FILE=TRIM(FNAME), EXIST=fileExists)
+     IF ( .NOT. fileExists ) THEN
+        WRITE(*,*) TRIM(Iam)//': Missing adjoint checkpoint file: ', TRIM(FNAME)
+        STATUS = GC_FAILURE
+        _VERIFY(STATUS)
+     ENDIF
 
      call MAPL_ESMFStateReadFromFile(INTERNAL, CLOCK, &
           FNAME, &

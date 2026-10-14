@@ -128,6 +128,7 @@ MODULE State_Chm_Mod
 #ifdef ADJOINT
      REAL(fp),          POINTER :: SpeciesAdj (:,:,:,:) ! Species adjoint variables
      REAL(fp),          POINTER :: CostFuncMask(:,:,:)  ! cost function volume mask
+     REAL(fp),           POINTER :: SurfaceFluxAdj(:,:,:) ! Adjoint of surface fluxes
 #endif
 
      !----------------------------------------------------------------------
@@ -514,6 +515,7 @@ CONTAINS
     ! Chemical species adjoint variables
     State_Chm%SpeciesAdj    => NULL()
     State_Chm%CostFuncMask  => NULL()
+    State_Chm%SurfaceFluxAdj => NULL()
 #endif
 
     ! Photolysis state
@@ -1025,6 +1027,32 @@ CONTAINS
        CALL GC_Error( errMsg, RC, thisLoc )
        RETURN
     ENDIF
+
+    !========================================================================
+    ! Allocate and initialize Surface Flux Adjoint
+    !========================================================================
+    chmID = 'SurfaceFluxAdj'
+    
+      ! Note: Surface flux adjoints are 2D (Lat, Lon) per species,
+      ! with third dimension indexed by species ID (nSpecies).
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Chm  = State_Chm,                                             &
+         State_Grid = State_Grid,                                            &
+         chmId      = chmId,                                                 &
+         Ptr2Data   = State_Chm%SurfaceFluxAdj,                              &
+         ! 3rd dimension is species
+         nSlots     = State_Chm%nSpecies,                                    &
+         RC         = RC                                                     &
+                            )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( chmId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+
 #endif
 
     !========================================================================
@@ -2423,6 +2451,28 @@ CONTAINS
           RETURN
        ENDIF
     ENDIF
+
+#ifdef ADJOINT
+    ! Adjoint surface-flux integration requires SurfaceFlux regardless of
+    ! whether non-local PBL mixing (LTURB/LNLPBL) is enabled.
+    IF ( .NOT. ASSOCIATED( State_Chm%SurfaceFlux ) ) THEN
+       chmId = 'SurfaceFlux'
+       CALL Init_and_Register(                                               &
+            Input_Opt  = Input_Opt,                                          &
+            State_Chm  = State_Chm,                                          &
+            State_Grid = State_Grid,                                         &
+            chmId      = chmId,                                              &
+            Ptr2Data   = State_Chm%SurfaceFlux,                              &
+            nSlots     = State_Chm%nAdvect,                                  &
+            RC         = RC                                                 )
+
+       IF ( RC /= GC_SUCCESS ) THEN
+          errMsg = TRIM( errMsg_ir ) // TRIM( chmId )
+          CALL GC_Error( errMsg, RC, thisLoc )
+          RETURN
+       ENDIF
+    ENDIF
+#endif
 
     !------------------------------------------------------------------
     ! TLSTT (Linoz)
@@ -4133,6 +4183,34 @@ CONTAINS
        State_Chm%KRATE => NULL()
     ENDIF
 
+#ifdef ADJOINT
+    IF ( ASSOCIATED( State_Chm%SpeciesAdj ) ) THEN
+       DEALLOCATE( State_Chm%SpeciesAdj, STAT=RC  )
+       CALL GC_CheckVar( 'State_Chm%SpeciesAdj', 2, RC )
+       IF ( RC /= GC_SUCCESS ) RETURN
+       State_Chm%SpeciesAdj => NULL()
+    ENDIF
+    
+     IF ( ASSOCIATED( State_Chm%CostFuncMask ) ) THEN
+       DEALLOCATE( State_Chm%CostFuncMask, STAT=RC  )
+       CALL GC_CheckVar( 'State_Chm%CostFuncMask', 2, RC )
+       IF ( RC /= GC_SUCCESS ) RETURN
+       State_Chm%CostFuncMask => NULL()
+    ENDIF
+    
+    
+    IF ( ASSOCIATED( State_Chm%SurfaceFluxAdj ) ) THEN
+       DEALLOCATE( State_Chm%SurfaceFluxAdj, STAT=RC  )
+       CALL GC_CheckVar( 'State_Chm%SurfaceFluxAdj', 2, RC )
+       IF ( RC /= GC_SUCCESS ) RETURN
+       State_Chm%SurfaceFluxAdj => NULL()
+    ENDIF   
+    
+#endif    
+
+
+
+
     !-----------------------------------------------------------------------
     ! Template for deallocating more arrays, replace xxx with field name
     !-----------------------------------------------------------------------
@@ -4286,6 +4364,11 @@ CONTAINS
           IF ( isDesc    ) Desc  = 'Cost function volume mask'
           IF ( isUnits   ) Units = 'none'
           IF ( isRank    ) Rank  = 3
+       CASE ( 'SURFACEFLUXADJ' )
+          IF ( isDesc   ) Desc   = 'Adjoint sensitivity to Surface Fluxes'
+          IF ( isUnits  ) Units  = 'none'  ! Kay: Is this correct??
+          IF ( isRank   ) Rank   = 2       ! 2D Map + Species
+          IF ( isSpc    ) PerSpc = 'ALL'   
 #endif
 
        CASE( 'BOUNDARYCOND' )

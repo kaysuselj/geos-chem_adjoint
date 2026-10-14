@@ -436,13 +436,38 @@ MODULE Input_Opt_Mod
      ! GCHP adjoint fields
      !---------------------------------------
      LOGICAL                     :: IS_ADJOINT
-     LOGICAL                     :: IS_FD_SPOT, IS_FD_GLOBAL
+     LOGICAL                     :: IS_FD_SPOT, IS_FD_GLOBAL, IS_FD_LAYER, IS_FD_REGIONAL
      INTEGER                     :: FD_STEP
      LOGICAL                     :: IS_FD_SPOT_THIS_PET
-     INTEGER                     :: IFD, JFD, NFD, LFD, NFD_ADJ
-     INTEGER                     :: CF_IMIN, CF_IMAX
-     INTEGER                     :: CF_JMIN, CF_JMAX
-     INTEGER                     :: CF_LMIN, CF_LMAX
+    INTEGER                     :: IFD, JFD
+    INTEGER                     :: NFD, LFD, NFD_ADJ
+!    INTEGER                     :: CF_IMIN, CF_IMAX
+!    INTEGER                     :: CF_JMIN, CF_JMAX
+!    INTEGER                     :: CF_LMIN, CF_LMAX
+    REAL(fp)                    :: FD_LAT_MIN, FD_LAT_MAX, FD_LON_MIN, FD_LON_MAX
+    REAL(fp)                    :: Adjoint_Val
+    LOGICAL                     :: ADJOINT_FROM_FILE
+    CHARACTER(LEN=512)          :: OCO2_FORCING_DIR
+    ! Adjoint HEMCO surface-flux controls.
+    ! Values are read from GCHP.rc in GCHP_Chunk_Init using labels:
+    !   ADJ_HEMCO_SFLUX_SELECTOR:
+    !   ADJ_HEMCO_SFLUX_DIAGN:
+    !   ADJ_HEMCO_SFLUX_EXTNAME:
+    !   ADJ_HEMCO_SFLUX_CAT:
+    !   ADJ_HEMCO_SFLUX_HIER:
+    ! and are consumed by Compute_Sflx_For_Adjoint/Get_Adjoint_Hemco_SurfaceFlux.
+    LOGICAL                     :: ADJ_HEMCO_SFLUX_ENABLED
+    ! Internal convenience switch set true if selector is not NONE/blank.
+    CHARACTER(LEN=255)          :: ADJ_HEMCO_SFLUX_SELECTOR
+    ! Selector mode: NONE, DIAGN, TOTAL, or FILTERED.
+    CHARACTER(LEN=255)          :: ADJ_HEMCO_SFLUX_DIAGN
+    ! Diagnostic name used when selector is DIAGN.
+    CHARACTER(LEN=255)          :: ADJ_HEMCO_SFLUX_EXTNAME
+    ! Optional HEMCO extension name used by FILTERED mode.
+    INTEGER                     :: ADJ_HEMCO_SFLUX_CAT
+    ! Optional HEMCO category used by FILTERED mode.
+    INTEGER                     :: ADJ_HEMCO_SFLUX_HIER
+    ! Optional HEMCO hierarchy used by FILTERED mode.
 #endif
 
      !----------------------------------------
@@ -936,12 +961,29 @@ CONTAINS
     Input_Opt%IS_ADJOINT             = .FALSE.
     Input_Opt%IS_FD_SPOT             = .FALSE.
     Input_Opt%IS_FD_GLOBAL           = .FALSE.
+    Input_Opt%IS_FD_LAYER            = .FALSE.
+    Input_Opt%IS_FD_REGIONAL         = .FALSE.
     Input_Opt%IS_FD_SPOT_THIS_PET    = .FALSE.
     Input_Opt%FD_STEP                = -999
     Input_Opt%IFD                    = -999
     Input_Opt%JFD                    = -999
     Input_Opt%NFD                    = -999
     Input_Opt%LFD                    = -999
+    Input_Opt%FD_LAT_MIN                = -999.0_fp
+    Input_Opt%FD_LAT_MAX                = -999.0_fp
+    Input_Opt%FD_LON_MIN                = -999.0_fp
+    Input_Opt%FD_LON_MAX                = -999.0_fp
+    Input_Opt%Adjoint_Val               = 1.0_fp
+    Input_Opt%ADJOINT_FROM_FILE         = .FALSE.
+    Input_Opt%OCO2_FORCING_DIR          = ''
+    ! Defaults for adjoint HEMCO surface-flux controls.
+    ! These are overwritten by GCHP.rc labels in GCHP_Chunk_Init when present.
+    Input_Opt%ADJ_HEMCO_SFLUX_ENABLED = .FALSE.
+    Input_Opt%ADJ_HEMCO_SFLUX_SELECTOR = 'NONE'
+    Input_Opt%ADJ_HEMCO_SFLUX_DIAGN    = ''
+    Input_Opt%ADJ_HEMCO_SFLUX_EXTNAME  = ''
+    Input_Opt%ADJ_HEMCO_SFLUX_CAT      = -1
+    Input_Opt%ADJ_HEMCO_SFLUX_HIER     = -1
 #endif
 
     !----------------------------------------

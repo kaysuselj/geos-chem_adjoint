@@ -156,19 +156,25 @@ CONTAINS
 #ifdef ADJOINT
     ! Adoint variables
     ! Local Finite Difference variables
-    REAL(fp)                       :: FD_LAT, FD_LON
+   REAL(fp)                       :: FD_LAT_COORD, FD_LON_COORD
     INTEGER                        :: FD_STEP
     CHARACTER(LEN=ESMF_MAXSTR)     :: FD_SPEC
+   CHARACTER(LEN=ESMF_MAXSTR)     :: AdjSfluxSelector
+   CHARACTER(LEN=ESMF_MAXSTR)     :: AdjSfluxDiagn
+   CHARACTER(LEN=ESMF_MAXSTR)     :: AdjSfluxExtName
     REAL(fp)                       :: d, dmin
     INTEGER                        :: imin, jmin, NFD, LFD
-    INTEGER                        :: IFD, JFD
+   INTEGER                        :: IFD, JFD
+   INTEGER                        :: AdjSfluxCat, AdjSfluxHier
+   INTEGER                        :: AdjSfluxNA
     CHARACTER(LEN=ESMF_MAXSTR)     :: FD_TYPE
+    INTEGER                        :: adj_from_file_int
 
-    ! At present, we are unable to load cube-sphere files through ExtData
-    ! so we will define the cost function region thusly in GCHP.rc
-    INTEGER                        :: CF_IMIN, CF_IMAX
-    INTEGER                        :: CF_JMIN, CF_JMAX
-    INTEGER                        :: CF_LMIN, CF_LMAX
+   ! At present, we are unable to load cube-sphere files through ExtData
+   ! so we will define the cost function region thusly in GCHP.rc
+!   INTEGER                        :: CF_IMIN, CF_IMAX
+!   INTEGER                        :: CF_JMIN, CF_JMAX
+!   INTEGER                        :: CF_LMIN, CF_LMAX
 
     ! Need to get gloabl grid information for some FD spot tests
     TYPE(ESMF_Grid)                :: grid           ! ESMF Grid object
@@ -257,6 +263,33 @@ CONTAINS
 
 
 #ifdef ADJOINT
+
+    ! COMMENTS ON ADJOINT NAMELIST OPTIONS:
+    !
+    ! FD_SPEC - defines the species to be perturbed or adjointed (i.e. 'CO2') --> NFD 
+    ! 
+    ! FORWARD SIMULATION:
+    ! - Design experiments for validation of adjoint sensitivities (if FD_STEP=1 or 2)
+    ! - FD_TYPE define define how the perturbation is applied:
+    !    - FD_TYPE='GLOBAL' - perturb all grid cells by a small amount
+   !    - FD_TYPE='SPOT' - perturb a single grid cell (defined by IFD/JFD/LFD or nearest lat/lon point)
+    !    - FD_TYPE='LAYER' - perturb all grid cells in a given layer (defined by LFD)
+    ! - FD_STEP defines the perturbation magnitude:
+    !    - FD_STEP=1  - increase initial concentration by 10%
+    !    - FD_STEP=2  - decrease initial concentration by 10%
+    !    - FD_STEP=3  - increase initial concentration by 5%
+    !    - FD_STEP=4  - decrease initial concentration by 5%
+    !    - FD_STEP=6  - increase initial concentration by 1%
+    !    - FD_STEP=7  - decrease initial concentration by 1%
+    !
+    ! ADJOINT SIMULATION:
+    ! - FD_TYPE defines the initial adjoint variable:
+    !  - FD_TYPE='GLOBAL' AND - Adjoint is 1 for all grid cells (for species NFD)
+    !  - FD_TYPE='LAYER' - Adjoint is 1 for all grid cells (for species NFD) at layer LFD
+   !  - FD_TYPE='SPOT' - Adjoint is 1 for grid cell (IFD,JFD,LFD) or nearest lat/lon point 
+    !
+    !
+    ! 
     ! Are we running the adjoint?
     call ESMF_ConfigGetAttribute(CF, ModelPhase,            &
                                  Label="MODEL_PHASE:" ,         &
@@ -273,17 +306,36 @@ CONTAINS
          Label="FD_TYPE:" , Default='NONE', RC=STATUS)
     _VERIFY(STATUS)
 
-    Input_Opt%IS_FD_GLOBAL = TRIM(To_UpperCase(FD_TYPE(1:4))) == 'GLOB'
-    Input_Opt%IS_FD_SPOT   = TRIM(To_UpperCase(FD_TYPE(1:4))) == 'SPOT'
-    IF (MAPL_Am_I_Root()) THEN
-       WRITE(*,1091) TRIM(FD_TYPE), Input_Opt%IS_FD_GLOBAL, Input_Opt%IS_FD_SPOT
-    ENDIF
-1091   FORMAT('FD_TYPE = ', a6, ', FD_GLOB = ', L1, ', FD_SPOT = ', L1)
+    Input_Opt%IS_FD_GLOBAL   = TRIM(To_UpperCase(FD_TYPE(1:4))) == 'GLOB'
+    Input_Opt%IS_FD_SPOT     = TRIM(To_UpperCase(FD_TYPE(1:4))) == 'SPOT'
+    Input_Opt%IS_FD_LAYER    = TRIM(To_UpperCase(FD_TYPE(1:4))) == 'LAYE'
+    Input_Opt%IS_FD_REGIONAL = TRIM(To_UpperCase(FD_TYPE(1:4))) == 'REGI'
+
+    call WRITE_PARALLEL('FD_TYPE IS:'//FD_TYPE)
+    IF (Input_Opt%IS_FD_GLOBAL)   call WRITE_PARALLEL('FD_TYPE: GLOB')
+    IF (Input_Opt%IS_FD_SPOT)     call WRITE_PARALLEL('FD_TYPE: SPOT')
+    IF (Input_Opt%IS_FD_LAYER)    call WRITE_PARALLEL('FD_TYPE: LAYER')
+    IF (Input_Opt%IS_FD_REGIONAL) call WRITE_PARALLEL('FD_TYPE: REGIONAL')
 
 
-
+    ! If we run forward by default no perturbation of
     call ESMF_ConfigGetAttribute(CF, FD_STEP, &
-         Label="FD_STEP:" , Default=-1, RC=STATUS)
+         Label="FD_STEP:" , Default=0, RC=STATUS)
+    _VERIFY(STATUS)
+
+    call ESMF_ConfigGetAttribute(CF, Input_Opt%Adjoint_Val, &
+         Label="ADJOINT_VAL:", Default=1.0d0, RC=STATUS)
+    _VERIFY(STATUS)
+
+    adj_from_file_int = 0
+    call ESMF_ConfigGetAttribute(CF, adj_from_file_int, &
+         Label="ADJOINT_FROM_FILE:", Default=0, RC=STATUS)
+    _VERIFY(STATUS)
+    Input_Opt%ADJOINT_FROM_FILE = (adj_from_file_int /= 0)
+
+    Input_Opt%OCO2_FORCING_DIR = ''
+    call ESMF_ConfigGetAttribute(CF, Input_Opt%OCO2_FORCING_DIR, &
+         Label="OCO2_FORCING_DIR:", Default="", RC=STATUS)
     _VERIFY(STATUS)
 
     IF (Input_Opt%IS_FD_GLOBAL .or. Input_Opt%IS_FD_SPOT)  THEN
@@ -303,12 +355,14 @@ CONTAINS
           NFD = Ind_(FD_SPEC)
        ENDIF
 
-       call ESMF_ConfigGetAttribute(CF, IFD, &
-            Label="IFD:", default=-1, RC=STATUS)
+      call WRITE_PARALLEL('FD_SPEC'//FD_SPEC)
+
+      call ESMF_ConfigGetAttribute(CF, IFD, &
+         Label="IFD:", default=-1, RC=STATUS)
        _VERIFY(STATUS)
 
-       call ESMF_ConfigGetAttribute(CF, JFD, &
-            Label="JFD:", default=-1, RC=STATUS)
+      call ESMF_ConfigGetAttribute(CF, JFD, &
+         Label="JFD:", default=-1, RC=STATUS)
        _VERIFY(STATUS)
 
        ! Get the ESMF grid attached to this gridded component
@@ -334,16 +388,17 @@ CONTAINS
 
        ELSE
 
-          call ESMF_ConfigGetAttribute(CF, FD_LAT, &
+         call ESMF_ConfigGetAttribute(CF, FD_LAT_COORD, &
                Label="FD_LAT:", default=-999.0d0, RC=STATUS)
           _VERIFY(STATUS)
 
-          call ESMF_ConfigGetAttribute(CF, FD_LON, &
+         call ESMF_ConfigGetAttribute(CF, FD_LON_COORD, &
                Label="FD_LON:", default=-999.0d0, RC=STATUS)
           _VERIFY(STATUS)
 
-          _ASSERT( FD_LAT .ne. -999.0d0 .and. FD_LON .ne. -999.0d0, 'FD_SPOT requires either IFD and JFD or FD_LAT and FD_LON be set in GCHP.rc')
-
+         IF (Input_Opt%IS_FD_SPOT) THEN
+          _ASSERT( FD_LAT_COORD .ne. -999.0d0 .and. FD_LON_COORD .ne. -999.0d0, 'FD_SPOT requires either IFD/JFD or latitude/longitude coordinates in GCHP.rc')
+         ENDIF
 
           dmin = 99999.9
           imin = -1
@@ -351,8 +406,8 @@ CONTAINS
           ! try to find lat lon grid cell closest to 44.65, -63.58 (Halifax, NS)
           DO I = 1, state_grid%nx
              DO J = 1, state_grid%ny
-                d = sqrt((state_grid%XMID(I,J) - FD_LON)**2 + &
-                     (state_grid%YMID(I,J) - FD_LAT)**2)
+                d = sqrt((state_grid%XMID(I,J) - FD_LON_COORD)**2 + &
+                   (state_grid%YMID(I,J) - FD_LAT_COORD)**2)
                 if (d < dmin) then
                    dmin = d
                    imin = i
@@ -375,104 +430,158 @@ CONTAINS
 
        Input_Opt%NFD = NFD
 
+        IF ( Input_Opt%IS_ADJOINT ) THEN
+         ! Read adjoint HEMCO surface-flux controls from GCHP.rc and store
+         ! them in Input_Opt for later use in the HEMCO interface.
+         !
+         ! ADJ_HEMCO_SFLUX_SELECTOR: NONE, DIAGN, TOTAL, FILTERED
+         ! ADJ_HEMCO_SFLUX_DIAGN:    diagnostic name used by DIAGN mode
+         ! ADJ_HEMCO_SFLUX_EXTNAME:  optional extension name for FILTERED
+         ! ADJ_HEMCO_SFLUX_CAT:      optional category for FILTERED
+         ! ADJ_HEMCO_SFLUX_HIER:     optional hierarchy for FILTERED
+         CALL ESMF_ConfigGetAttribute( CF, AdjSfluxSelector,                &
+            Label="ADJ_HEMCO_SFLUX_SELECTOR:", Default='NONE', RC=STATUS )
+         _VERIFY(STATUS)
+         CALL ESMF_ConfigGetAttribute( CF, AdjSfluxDiagn,                   &
+            Label="ADJ_HEMCO_SFLUX_DIAGN:", Default='', RC=STATUS )
+         _VERIFY(STATUS)
+         CALL ESMF_ConfigGetAttribute( CF, AdjSfluxExtName,                 &
+            Label="ADJ_HEMCO_SFLUX_EXTNAME:", Default='', RC=STATUS )
+         _VERIFY(STATUS)
+         CALL ESMF_ConfigGetAttribute( CF, AdjSfluxCat,                     &
+            Label="ADJ_HEMCO_SFLUX_CAT:", Default=-1, RC=STATUS )
+         _VERIFY(STATUS)
+         CALL ESMF_ConfigGetAttribute( CF, AdjSfluxHier,                    &
+            Label="ADJ_HEMCO_SFLUX_HIER:", Default=-1, RC=STATUS )
+         _VERIFY(STATUS)
+
+         Input_Opt%ADJ_HEMCO_SFLUX_SELECTOR = TRIM( To_UpperCase( ADJUSTL( AdjSfluxSelector ) ) )
+         Input_Opt%ADJ_HEMCO_SFLUX_DIAGN    = TRIM( ADJUSTL( AdjSfluxDiagn ) )
+         Input_Opt%ADJ_HEMCO_SFLUX_EXTNAME  = TRIM( ADJUSTL( AdjSfluxExtName ) )
+         Input_Opt%ADJ_HEMCO_SFLUX_CAT      = AdjSfluxCat
+         Input_Opt%ADJ_HEMCO_SFLUX_HIER     = AdjSfluxHier
+          ! Internal convenience boolean used by downstream routines.
+         Input_Opt%ADJ_HEMCO_SFLUX_ENABLED  =                                &
+            Input_Opt%ADJ_HEMCO_SFLUX_SELECTOR /= '' .AND.                 &
+            Input_Opt%ADJ_HEMCO_SFLUX_SELECTOR /= 'NONE'
+        ENDIF
+
        call ESMF_ConfigGetAttribute(CF, LFD, &
-            Label="LFD:", RC=STATUS)
+            Label="LFD:",default=0, RC=STATUS)
        _VERIFY(STATUS)
+       PRINT *, "LFD:",LFD
+       !_ASSERT((Input_Opt%IS_FD_LAYER .and. (LFD .eq. 0)), 'FD_LAYER requires LFD to be set and positive in GCHP.rc')
 
        Input_Opt%LFD = LFD
 
-       ! Read in cost function region
-
-       call ESMF_ConfigGetAttribute(CF, CF_IMIN, &
-            Label="CF_IMIN:", default=-1, RC=STATUS)
-       _VERIFY(STATUS)
-
-       CF_IMIN = CF_IMIN - IL_PET + 1
-
-       call ESMF_ConfigGetAttribute(CF, CF_IMAX, &
-            Label="CF_IMAX:", default=-1, RC=STATUS)
-       _VERIFY(STATUS)
-
-       CF_IMAX = CF_IMAX - IL_PET + 1
-
-       call ESMF_ConfigGetAttribute(CF, CF_JMIN, &
-            Label="CF_JMIN:", default=-1, RC=STATUS)
-       _VERIFY(STATUS)
-
-       CF_JMIN = CF_JMIN - JL_PET + 1
-
-       call ESMF_ConfigGetAttribute(CF, CF_JMAX, &
-            Label="CF_JMAX:", default=-1, RC=STATUS)
-       _VERIFY(STATUS)
-
-       CF_JMAX = CF_JMAX - JL_PET + 1
-
-       call ESMF_ConfigGetAttribute(CF, CF_LMIN, &
-            Label="CF_LMIN:", default=-1, RC=STATUS)
-       _VERIFY(STATUS)
-
-       call ESMF_ConfigGetAttribute(CF, CF_LMAX, &
-            Label="CF_LMAX:", default=-1, RC=STATUS)
-       _VERIFY(STATUS)
-
-       IF (CF_IMIN < 1 .OR. CF_IMIN > State_Grid%NX .OR. &
-            CF_IMAX < 1 .OR. CF_IMAX > State_Grid%NX .OR. &
-            CF_JMIN < 1 .OR. CF_JMIN > State_Grid%NY .OR. &
-            CF_JMAX < 1 .OR. CF_JMAX > State_Grid%NY) THEN
-       WRITE(*,1028) Input_Opt%thisCPU,   &
-            Input_Opt%CF_IMIN, Input_Opt%CF_IMAX, &
-            Input_Opt%CF_JMIN, Input_Opt%CF_JMAX, &
-            Input_Opt%CF_LMIN, Input_Opt%CF_LMAX
-1028   FORMAT('Pre-CF on Pet ', i3, ' I = (', i3, ', ', i3, ') &
-             J = ( ', i3, ', ', i3, ') &
-             L = (', i3, ', ', i3, ')')
-
-          CF_IMIN = -1
-          CF_IMAX = -1
-          CF_JMIN = -1
-          CF_JMAX = -1
-          CF_LMIN = -1
-          CF_LMAX = -1
+       ! Read REGIONAL adjoint parameters if FD_TYPE='REGIONAL'
+       IF (Input_Opt%IS_FD_REGIONAL) THEN
+         call ESMF_ConfigGetAttribute(CF, Input_Opt%FD_LAT_MIN, &
+            Label="FD_LAT_MIN:", default=-999.0_fp, RC=STATUS)
+          _VERIFY(STATUS)
+          call ESMF_ConfigGetAttribute(CF, Input_Opt%FD_LAT_MAX, &
+            Label="FD_LAT_MAX:", default=-999.0_fp, RC=STATUS)
+          _VERIFY(STATUS)
+          call ESMF_ConfigGetAttribute(CF, Input_Opt%FD_LON_MIN, &
+            Label="FD_LON_MIN:", default=-999.0_fp, RC=STATUS)
+          _VERIFY(STATUS)
+          call ESMF_ConfigGetAttribute(CF, Input_Opt%FD_LON_MAX, &
+            Label="FD_LON_MAX:", default=-999.0_fp, RC=STATUS)
+          _VERIFY(STATUS)
        ENDIF
 
-       _ASSERT(CF_IMIN * CF_IMAX > 0, 'Please define both max and min for CF_I')
-       _ASSERT(CF_JMIN * CF_JMAX > 0, 'Please define both max and min for CF_J')
-       _ASSERT(CF_LMIN * CF_LMAX > 0, 'Please define both max and min for CF_L')
-
-       _ASSERT(CF_LMIN * CF_IMIN > 0, 'If CF_I: is defined, please define CF_L')
-       _ASSERT(CF_JMIN * CF_IMIN > 0, 'If CF_I: is defined, please define CF_J')
-
-       ! At this point, they should all be set or all be negative (probably -1)
-       IF (CF_IMIN > 0) THEN
-          Input_Opt%CF_IMIN = CF_IMIN
-          Input_Opt%CF_IMAX = CF_IMAX
-          Input_Opt%CF_JMIN = CF_JMIN
-          Input_Opt%CF_JMAX = CF_JMAX
-          Input_Opt%CF_LMIN = CF_LMIN
-          Input_Opt%CF_LMAX = CF_LMAX
-       ELSEIF (Input_Opt%IS_FD_SPOT_THIS_PET) THEN
-          Input_Opt%CF_IMIN = Input_Opt%IFD
-          Input_Opt%CF_IMAX = Input_Opt%IFD
-          Input_Opt%CF_JMIN = Input_Opt%JFD
-          Input_Opt%CF_JMAX = Input_Opt%JFD
-          Input_Opt%CF_LMIN = Input_Opt%LFD
-          Input_Opt%CF_LMAX = Input_Opt%LFD
-       WRITE(*,1027) Input_Opt%thisCPU,   &
-            Input_Opt%CF_IMIN, Input_Opt%CF_IMAX, &
-            Input_Opt%CF_JMIN, Input_Opt%CF_JMAX, &
-            Input_Opt%CF_LMIN, Input_Opt%CF_LMAX
-1027   FORMAT('CF on Pet ', i3, ' I = (', i3, ', ', i3, ') &
-             J = ( ', i3, ', ', i3, ') &
-             L = (', i3, ', ', i3, ')')
-
-       ELSE
-          Input_Opt%CF_IMIN = -1
-          Input_Opt%CF_IMAX = -1
-          Input_Opt%CF_JMIN = -1
-          Input_Opt%CF_JMAX = -1
-          Input_Opt%CF_LMIN = -1
-          Input_Opt%CF_LMAX = -1
-       ENDIF
+   !       ! Read in cost function region
+   !
+   !       call ESMF_ConfigGetAttribute(CF, CF_IMIN, &
+   !            Label="CF_IMIN:", default=-1, RC=STATUS)
+   !       _VERIFY(STATUS)
+   !
+   !       CF_IMIN = CF_IMIN - IL_PET + 1
+   !
+   !       call ESMF_ConfigGetAttribute(CF, CF_IMAX, &
+   !            Label="CF_IMAX:", default=-1, RC=STATUS)
+   !       _VERIFY(STATUS)
+   !
+   !       CF_IMAX = CF_IMAX - IL_PET + 1
+   !
+   !       call ESMF_ConfigGetAttribute(CF, CF_JMIN, &
+   !            Label="CF_JMIN:", default=-1, RC=STATUS)
+   !       _VERIFY(STATUS)
+   !
+   !       CF_JMIN = CF_JMIN - JL_PET + 1
+   !
+   !       call ESMF_ConfigGetAttribute(CF, CF_JMAX, &
+   !            Label="CF_JMAX:", default=-1, RC=STATUS)
+   !       _VERIFY(STATUS)
+   !
+   !       CF_JMAX = CF_JMAX - JL_PET + 1
+   !
+   !       call ESMF_ConfigGetAttribute(CF, CF_LMIN, &
+   !            Label="CF_LMIN:", default=-1, RC=STATUS)
+   !       _VERIFY(STATUS)
+   !
+   !       call ESMF_ConfigGetAttribute(CF, CF_LMAX, &
+   !            Label="CF_LMAX:", default=-1, RC=STATUS)
+   !       _VERIFY(STATUS)
+   !
+   !       IF (CF_IMIN < 1 .OR. CF_IMIN > State_Grid%NX .OR. &
+   !            CF_IMAX < 1 .OR. CF_IMAX > State_Grid%NX .OR. &
+   !            CF_JMIN < 1 .OR. CF_JMIN > State_Grid%NY .OR. &
+   !            CF_JMAX < 1 .OR. CF_JMAX > State_Grid%NY) THEN
+   !       WRITE(*,1028) Input_Opt%thisCPU,   &
+   !            Input_Opt%CF_IMIN, Input_Opt%CF_IMAX, &
+   !            Input_Opt%CF_JMIN, Input_Opt%CF_JMAX, &
+   !            Input_Opt%CF_LMIN, Input_Opt%CF_LMAX
+   !1028   FORMAT('Pre-CF on Pet ', i3, ' I = (', i3, ', ', i3, ') &
+   !             J = ( ', i3, ', ', i3, ') &
+   !             L = (', i3, ', ', i3, ')')
+   !
+   !          CF_IMIN = -1
+   !          CF_IMAX = -1
+   !          CF_JMIN = -1
+   !          CF_JMAX = -1
+   !          CF_LMIN = -1
+   !          CF_LMAX = -1
+   !       ENDIF
+   !
+   !       _ASSERT(CF_IMIN * CF_IMAX > 0, 'Please define both max and min for CF_I')
+   !       _ASSERT(CF_JMIN * CF_JMAX > 0, 'Please define both max and min for CF_J')
+   !       _ASSERT(CF_LMIN * CF_LMAX > 0, 'Please define both max and min for CF_L')
+   !
+   !       _ASSERT(CF_LMIN * CF_IMIN > 0, 'If CF_I: is defined, please define CF_L')
+   !       _ASSERT(CF_JMIN * CF_IMIN > 0, 'If CF_I: is defined, please define CF_J')
+   !
+   !       ! At this point, they should all be set or all be negative (probably -1)
+   !       IF (CF_IMIN > 0) THEN
+   !          Input_Opt%CF_IMIN = CF_IMIN
+   !          Input_Opt%CF_IMAX = CF_IMAX
+   !          Input_Opt%CF_JMIN = CF_JMIN
+   !          Input_Opt%CF_JMAX = CF_JMAX
+   !          Input_Opt%CF_LMIN = CF_LMIN
+   !          Input_Opt%CF_LMAX = CF_LMAX
+   !       ELSEIF (Input_Opt%IS_FD_SPOT_THIS_PET) THEN
+   !          Input_Opt%CF_IMIN = Input_Opt%IFD
+   !          Input_Opt%CF_IMAX = Input_Opt%IFD
+   !          Input_Opt%CF_JMIN = Input_Opt%JFD
+   !          Input_Opt%CF_JMAX = Input_Opt%JFD
+   !          Input_Opt%CF_LMIN = Input_Opt%LFD
+   !          Input_Opt%CF_LMAX = Input_Opt%LFD
+   !       WRITE(*,1027) Input_Opt%thisCPU,   &
+   !            Input_Opt%CF_IMIN, Input_Opt%CF_IMAX, &
+   !            Input_Opt%CF_JMIN, Input_Opt%CF_JMAX, &
+   !            Input_Opt%CF_LMIN, Input_Opt%CF_LMAX
+   !1027   FORMAT('CF on Pet ', i3, ' I = (', i3, ', ', i3, ') &
+   !             J = ( ', i3, ', ', i3, ') &
+   !             L = (', i3, ', ', i3, ')')
+   !
+   !       ELSE
+   !          Input_Opt%CF_IMIN = -1
+   !          Input_Opt%CF_IMAX = -1
+   !          Input_Opt%CF_JMIN = -1
+   !          Input_Opt%CF_JMAX = -1
+   !          Input_Opt%CF_LMIN = -1
+   !          Input_Opt%CF_LMAX = -1
+   !       ENDIF
 
        IF ( Input_Opt%IS_FD_SPOT_THIS_PET ) THEN
           write (*,1011) Input_Opt%thisCPU, dmin, imin, jmin, &
@@ -599,7 +708,7 @@ CONTAINS
                              day,        dayOfYr,    hour,       minute,     &
                              second,     utc,        hElapsed,   Input_Opt,  &
                              State_Chm,  State_Diag, State_Grid, State_Met,  &
-                             Phase,      IsChemTime, IsRadTime,              &
+                             Phase,      IsChemTime, IsAdjTime,  IsRadTime,  &
 #if defined( MODEL_GEOS )
                              FrstRewind, &
 #endif
@@ -630,6 +739,9 @@ CONTAINS
     USE HCO_Interface_Common, ONLY : SetHcoTime
     USE HCO_Interface_GC_Mod, ONLY : Compute_Sflx_For_Vdiff
     USE HCO_Interface_GC_Mod, ONLY : Set_DryDepVel_Diagnostics
+#if defined( ADJOINT )
+   USE HCO_Interface_GC_Mod, ONLY : Compute_Sflx_For_Adjoint
+#endif
 
     ! Specialized subroutines
     USE Calc_Met_Mod,       ONLY : AirQnt
@@ -662,6 +774,9 @@ CONTAINS
 #ifdef ADJOINT
     USE PhysConstants,      ONLY : AIRMW
     USE Diagnostics_Mod,    ONLY :  Set_SpcAdj_Diagnostic
+    USE Adjoint_Utils_Mod,  ONLY : Push_State,Pop_State,State_Snapshot, &
+                     Setup_Adjoint_ForwardPert,Integrate_Srf_Adjoint, &
+                     Load_OCO2_Adjoint_Forcing
 #endif
 
 #if defined( RRTMG )
@@ -691,6 +806,7 @@ CONTAINS
     REAL*4,         INTENT(IN)    :: hElapsed    ! Elapsed hours
     INTEGER,        INTENT(IN)    :: Phase       ! Run phase (-1, 1 or 2)
     LOGICAL,        INTENT(IN)    :: IsChemTime  ! Time for chemistry?
+    LOGICAL,        INTENT(IN)    :: IsAdjTime   ! Time for adjoint forcing?
     LOGICAL,        INTENT(IN)    :: IsRadTime   ! Time for RRTMG?
 #if defined( MODEL_GEOS )
     LOGICAL,        INTENT(IN)    :: FrstRewind  ! Is it the first rewind?
@@ -744,6 +860,7 @@ CONTAINS
     LOGICAL                        :: DoChem
     LOGICAL                        :: DoWetDep
     LOGICAL                        :: DoRad
+    
 
     ! First call?
     LOGICAL, SAVE                  :: FIRST    = .TRUE.
@@ -767,13 +884,27 @@ CONTAINS
 
     ! Debug variables
     INTEGER, parameter             :: I_DBG = 6, J_DBG = 5, L_DBG=1
-#ifdef ADJOINT
+#if defined (ADJOINT)
     ! Adjoint Finitie Difference Variables
-    INTEGER                        :: IFD, JFD, LFD, NFD
     INTEGER                        :: I, J, L
-    REAL*8                         :: CFN
-    CHARACTER(len=ESMF_MAXSTR)     :: FD_SPEC, TRACNAME
+   INTEGER                        :: AdjSfluxNA
+    CHARACTER(len=ESMF_MAXSTR)     :: TRACNAME
     TYPE(Species),       POINTER   :: ThisSpc
+    ! State variables (i.e. concentrations before processes and at the end)
+    ! We need at the end for the remaining processes at the end of time step
+    TYPE(State_Snapshot)           :: S_Pre_Conv,S_Pre_Mix,S_End
+    ! Surface-level adjoint saved between the turbulence and convection adjoints
+    REAL(fp), ALLOCATABLE          :: SfcAdj_PreConv(:,:)
+    ! Time stamp of the adjoint forcing file (clock time + one step)
+    TYPE(ESMF_Time)                :: frcTime
+    TYPE(ESMF_TimeInterval)        :: frcDt
+    INTEGER                        :: frcYear, frcMonth, frcDay
+    INTEGER                        :: frcHour, frcMinute
+    LOGICAL                        :: IS_ADJOINT
+    ! Did the forward AirQnt call of this step update the mixing ratios?
+    LOGICAL                        :: AirQntUpdatedMR
+    ! whether we print adjoint debugs
+    LOGICAL,parameter              :: debug_adjoint = .TRUE.
 #endif
 
     ! For stratospheric adjustment
@@ -803,6 +934,20 @@ CONTAINS
        call ESMF_VmGetCurrent(VM, RC=STATUS)
        _VERIFY(STATUS)
     endif
+
+
+
+!#ifdef ADJOINT
+!  CALL Print_Global_Species_Kg( I_DBG, J_DBG, L_DBG,           &
+!                                       'CO2', Input_Opt, State_Chm,   &
+!                                       State_Grid, State_Met, trim(Iam) // &
+!                                       'beginning of GCHP chunk', RC)
+!#endif
+
+!    if (Input_Opt%amIRoot) then
+!       print *,'Kay CO2 concentration at start of chunk_run',State_Chm%Species(3)%Conc(6,5,1)
+!       endif
+
 
     !=======================================================================
     ! Define processes to be covered in this phase
@@ -888,7 +1033,7 @@ CONTAINS
     DoTend = ( DoEmis .OR. DoDryDep ) .AND. .NOT. Input_Opt%LTURB
 
     ! testing only
-    IF ( NCALLS < 10 ) THEN
+    IF ( NCALLS < 3 ) THEN
        ! Use pfLogger
        Call Input_Opt%lgr%info('GEOS-Chem phase %i2~:', Phase)
        Call Input_Opt%lgr%info('DoConv   : %l1', DoConv)
@@ -899,6 +1044,7 @@ CONTAINS
        Call Input_Opt%lgr%info('DoChem   : %l1', DoChem)
        Call Input_Opt%lgr%info('DoWetDep : %l1', DoWetDep)
     ENDIF
+  
 
     !-------------------------------------------------------------------------
     ! Pre-Run assignments
@@ -953,6 +1099,9 @@ CONTAINS
     IF ( RC /= GC_SUCCESS ) RETURN
 
     ! Define airmass and related quantities
+#if defined( ADJOINT )
+    AirQntUpdatedMR = .FALSE.
+#endif
 #if defined( MODEL_GEOS )
     CALL AirQnt( Input_Opt, State_Chm, State_Grid, State_Met, RC, .FALSE. )
 #else
@@ -965,12 +1114,26 @@ CONTAINS
        CALL ESMF_AttributeGet( IntField, NAME="RESTART", VALUE=RST, RC=STATUS )
        _VERIFY(STATUS)
        IF ( .not. ( RST == MAPL_RestartBootstrap .OR. &
-                    RST == MAPL_RestartSkipInitial ) ) scaleMR = .TRUE.
-       CALL AirQnt( Input_Opt, State_Chm, State_Grid, State_Met, RC, scaleMR )
+               RST == MAPL_RestartSkipInitial ) ) scaleMR = .TRUE.
+#if defined( ADJOINT )
+       AirQntUpdatedMR = scaleMR
+#endif
+      CALL AirQnt( Input_Opt, State_Chm, State_Grid, State_Met, RC, scaleMR )
        scaleMR = .TRUE.
     ELSE
+#if defined( ADJOINT )
+       AirQntUpdatedMR = scaleMR
+#endif
        CALL AirQnt( Input_Opt, State_Chm, State_Grid, State_Met, RC, scaleMR )
     ENDIF
+#if defined( ADJOINT )
+    ! Same test as in AirQnt (14.8.0): the mixing ratios are only updated if
+    ! the update flag is set and the global sums of DP_DRY_PREV and DELP_DRY
+    ! agree. The AIRQNT adjoint at the end of the adjoint step uses this.
+    AirQntUpdatedMR = AirQntUpdatedMR .AND.                                  &
+         ( ABS( SUM( State_Met%DP_DRY_PREV ) -                               &
+                SUM( State_Met%DELP_DRY    ) ) < 1d-14 )
+#endif
 #endif
 
     ! Initialize/reset wetdep after air quantities computed
@@ -1004,6 +1167,9 @@ CONTAINS
          previous_units = previous_units,                                    &
          RC             = RC                                                )
     _ASSERT(RC==GC_SUCCESS, 'Error calling CONVERT_SPC_UNITS')
+!    if (Input_Opt%AmIRoot .and. NCALLS < 10) then
+!       write(*,*) ' previous_units = ', previous_units
+!    endif
 
     !=======================================================================
     ! Always prescribe H2O in both the stratosphere and troposhere in GEOS.
@@ -1036,121 +1202,75 @@ CONTAINS
     CALL GET_COSINE_SZA( Input_Opt, State_Grid, State_Met, RC )
     _ASSERT(RC==GC_SUCCESS, 'Error calling GET_COSINE_SZA')
 
-#ifdef ADJOINT
-    if (.not. first) &
-         CALL Print_Global_Species_Kg( I_DBG, J_DBG, L_DBG,           &
-                                       'CO2', Input_Opt, State_Chm,   &
-                                       State_Grid, State_Met, trim(Iam) // &
-                                       ' before first unit conversion', RC)
-    CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
-         State_Grid, State_Met, trim(Iam) // ' before first unit conversion.', RC)
 
-    IF (first .and. Input_Opt%IS_FD_SPOT_THIS_PET .and.  Input_Opt%IS_FD_SPOT) THEN
-       FD_SPEC = transfer(state_chm%SpcData(Input_Opt%NFD)%Info%Name, FD_SPEC)
-       IFD = Input_Opt%IFD
-       JFD = Input_Opt%JFD
-       LFD = Input_Opt%LFD
-       NFD = Input_Opt%NFD
-       WRITE (*, 1017) TRIM(FD_SPEC), state_chm%Species(NFD)%Conc(IFD,JFD,LFD)
-       IF (Input_Opt%IS_ADJOINT) THEN
-          WRITE(*,*) ' Computing final cost function'
-          CFN = 0d0
-          state_chm%SpeciesAdj(:,:,:,NFD) = 0d0
-          DO L = 1,State_Grid%NZ
-          DO J = 1,State_Grid%NY
-          DO I = 1,State_Grid%NX
-             if (State_chm%CostFuncMask(I,J,L) > 0d0) THEN
-                WRITE (*, 1047) I, J, L, State_Chm%Species(NFD)%Conc(I,J,L)
-                state_chm%SpeciesAdj(I,J,L, NFD) = 1.0d0
-                CFN = CFN + State_Chm%Species(NFD)%Conc(I,J,L)
-             endif
-          ENDDO
-          ENDDO
-          ENDDO
-          WRITE(*,'(a7, e22.10)') ' CFN = ', CFN
-1047      FORMAT('  SPC(', i2, ', ', i2, ', ', i2, ') = ', e22.10)
-       ELSE
-          IF (Input_Opt%FD_STEP .eq. 0) THEN
-             WRITE(*, *) '    Not perturbing'
-          ELSEIF (Input_Opt%FD_STEP .eq. 1) THEN
-             WRITE(*, *) '    Perturbing +0.1'
-             State_Chm%Species(NFD)%Conc(IFD,JFD,LFD) = State_Chm%Species(NFD)%Conc(IFD,JFD,LFD) * 1.1d0
-          ELSEIF (Input_Opt%FD_STEP .eq. 2) THEN
-             WRITE(*, *) '    Perturbing -0.1'
-             State_Chm%Species(NFD)%Conc(IFD,JFD,LFD) = State_Chm%Species(NFD)%Conc(IFD,JFD,LFD) * 0.9d0
-          ELSE
-             WRITE(*, *) '    FD_STEP = ', Input_Opt%FD_STEP, ' NOT SUPPORTED!'
-          ENDIF
-          WRITE (*, 1017) TRIM(FD_SPEC), State_Chm%Species(NFD)%Conc(IFD,JFD,LFD)
-       ENDIF
-    ENDIF
+#if defined (ADJOINT)
+    if ( Input_Opt%IS_ADJOINT ) then
+     if (.not. first) &
+        CALL Print_Global_Species_Kg( I_DBG, J_DBG, L_DBG,           &
+                          'CO2', Input_Opt, State_Chm,   &
+                          State_Grid, State_Met, trim(Iam) // &
+                          ' before first unit conversion', RC)
+!     CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
+!        State_Grid, State_Met,State_Chm, trim(Iam) // ' before first unit conversion.', RC)
+    endif
+   
+  !
+  ! Setup adjoint state variable if adjoint calculation and perturbation if forward simulation
+  !  --- see possible options in Adjoint_Utils_Mod.F90:Setup_Adjoint_ForwardPert ---
+  ! 
+  ! ADJOINT RUN - Adjoint Concentrations in SpeciesConc are in mass CO2(x,y,z,t) per mass CO2(X_i,Y_i,Z_i,T_i) 
+  !  ({X,Y,Z,T}_i is the location at the prescribed location/time)
+  !  formally we call units KG_PER_KG_DRY
+  ! 
+   IF (first .AND. .NOT. Input_Opt%ADJOINT_FROM_FILE) &
+       CALL Setup_Adjoint_ForwardPert(State_Chm,State_Grid,Input_Opt)
 
-    IF (first .and. Input_Opt%IS_FD_GLOBAL) THEN
-       FD_SPEC = transfer(state_chm%SpcData(Input_Opt%NFD)%Info%Name, FD_SPEC)
-       NFD = Input_Opt%NFD
-       LFD = Input_Opt%LFD
-       IF (Input_Opt%IS_FD_SPOT_THIS_PET) THEN
-          IFD = Input_Opt%IFD
-          JFD = Input_Opt%JFD
-          WRITE (*, 1017) TRIM(FD_SPEC), State_Chm%Species(NFD)%Conc(IFD,JFD,LFD)
-          IF (Input_Opt%Is_Adjoint) &
-               WRITE (*, 1018) TRIM(FD_SPEC), state_chm%SpeciesAdj(IFD, JFD, LFD, NFD)
-       ENDIF
-       IF (.not. Input_Opt%IS_ADJOINT) THEN
-          IF (Input_Opt%FD_STEP .eq. 0) THEN
-             WRITE(*, *) '    Not perturbing'
-          ELSEIF (Input_Opt%FD_STEP .eq. 1) THEN
-             WRITE(*, *) '    Perturbing +0.1'
-             State_Chm%Species(NFD)%Conc = State_Chm%Species(NFD)%Conc(:,:,:) * 1.1d0
-          ELSEIF (Input_Opt%FD_STEP .eq. 2) THEN
-             WRITE(*, *) '    Perturbing -0.1'
-             State_Chm%Species(NFD)%Conc = State_Chm%Species(NFD)%Conc(:,:,:) * 0.9d0
-          ELSE
-             WRITE(*, *) '    FD_STEP = ', Input_Opt%FD_STEP, ' NOT SUPPORTED!'
-          ENDIF
-          IF (Input_Opt%IS_FD_SPOT_THIS_PET) &
-               WRITE (*, 1017) TRIM(FD_SPEC), State_Chm%Species(NFD)%Conc(IFD,JFD,LFD)
-       ELSE
-          state_chm%SpeciesAdj(:,:,:,:) = 0d0
-          IF (NFD > 0) THEN
-             IF (LFD > 0) THEN
-                IF (Input_opt%amIRoot) THEN
-                   WRITE(*,*) ' Setting Level ', LFD, ' forcing to 1'
-                ENDIF
-                state_chm%SpeciesAdj(:,:,LFD,NFD) = 1d0
-             ELSE
-                IF (Input_opt%amIRoot) THEN
-                   WRITE(*,*) ' Setting all forcing to 1'
-                ENDIF
-                state_chm%SpeciesAdj(:,:,:,NFD) = 1d0
-             ENDIF
-          ENDIF
-       ENDIF
-    ENDIF
+   
 
-1017 FORMAT('       SPC(', a10, ', FD_SPOT) = ', e22.10)
-1018   FORMAT('   SPC_ADJ(', a10, ', FD_SPOT) = ', e22.10)
-    IF (Input_Opt%IS_FD_SPOT_THIS_PET ) THEN
-       FD_SPEC = transfer(state_chm%SpcData(Input_Opt%NFD)%Info%Name, FD_SPEC)
-       NFD = Input_Opt%NFD
-       IFD = Input_Opt%IFD
-       JFD = Input_Opt%JFD
-       LFD = Input_Opt%LFD
-       WRITE(*,1017) TRIM(FD_SPEC), State_Chm%Species(NFD)%Conc(IFD,JFD,LFD)
-       IF (Input_Opt%Is_Adjoint) &
-            WRITE (*, 1018) TRIM(FD_SPEC), state_chm%SpeciesAdj(IFD, JFD, LFD, NFD)
-    ENDIF
+    if (Input_Opt%amIRoot .and. Input_Opt%IS_ADJOINT) then
+       print *,'Kay, Adjoint variables at the start of gchp_chunk_mod.F90'
+       print *, 'first', first
+       print *, 'Input_Opt:IFD,JFD,LFD,NFD',Input_Opt%IFD,Input_Opt%JFD,Input_Opt%LFD,Input_Opt%NFD
+       print *, 'StateGrid:NX,NY,NZ',State_Grid%NX,State_Grid%NY,State_Grid%NZ
+       if ( Input_Opt%NFD >= 1 .and. Input_Opt%NFD <= State_Chm%nSpecies .and. &
+            Input_Opt%LFD >= 1 .and. Input_Opt%LFD <= State_Grid%NZ ) then
+          print *,'adjoint variable',                                          &
+               State_Chm%SpeciesAdj( MIN(I_DBG,State_Grid%NX),                 &
+                                     MIN(J_DBG,State_Grid%NY),                 &
+                                     Input_Opt%LFD, Input_Opt%NFD )
+       else
+          print *,'Skipping adjoint value print: invalid LFD/NFD'
+       endif
+    endif
+
+
 #endif
 
+
+!
+! when doing adjoint we:
+! 1. first run model in forward mode (pretending that we don't do adjoint)
+! so that we compute the intermediate state and save it
+! 2. then go reverse, recover saved state and run the adjoint 
+#if defined (ADJOINT)
+	 IS_ADJOINT=Input_Opt%IS_ADJOINT 
+	 Input_Opt%IS_ADJOINT=.false.
+#endif	 
+	 	
     !=======================================================================
     ! EMISSIONS. Pass HEMCO Phase 1 which only updates the HEMCO clock
     ! and the HEMCO data list. Should be called every time to make sure
     ! that the HEMCO clock and the HEMCO data list are up to date.
     !=======================================================================
+   
     HCO_PHASE = 1
     CALL EMISSIONS_RUN( Input_Opt, State_Chm, State_Diag, &
                         State_Grid, State_Met, DoEmis, HCO_PHASE, RC  )
     _ASSERT(RC==GC_SUCCESS, 'Error calling EMISSIONS_RUN')
+
+!    if (Input_Opt%amIRoot) then
+!        print *,'Kay CO2 concentration after emissions',State_Chm%Species(3)%Conc(6,5,1)
+!    endif    
 
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 !!!                                PHASE 1 or -1                           !!!
@@ -1165,7 +1285,19 @@ CONTAINS
     ! friendly to this component!!
     !=======================================================================
     IF ( DoConv ) THEN
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Do convection now'
+
+! Save state pre-convection 
+#if defined ( ADJOINT )
+   if (Is_Adjoint) & 
+   CALL Push_State(State_Chm,S_Pre_Conv,State_Grid%NX,State_Grid%NY,State_Grid%NZ,Input_Opt%NFD)
+   
+!   if (debug_adjoint) &
+!     CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
+!         State_Grid, State_Met,State_Chm, trim(Iam) // ' fwd before convection.', RC)
+
+#endif 
+
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Do convection now'
        CALL MAPL_TimerOn( STATE, 'GC_CONV' )
 
        CALL DO_CONVECTION ( Input_Opt, State_Chm, State_Diag, &
@@ -1173,7 +1305,10 @@ CONTAINS
        _ASSERT(RC==GC_SUCCESS, 'Error calling DO_CONVECTION')
 
        CALL MAPL_TimerOff( STATE, 'GC_CONV' )
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Convection done!'
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Convection done!'
+ 
+  
+ 
     ENDIF
 
     !=======================================================================
@@ -1182,10 +1317,10 @@ CONTAINS
     ! Calculates the deposition rates in [s-1].
     !=======================================================================
     IF ( DoDryDep ) THEN
-       if(Input_Opt%AmIRoot.and.NCALLS<10) THEN
-          write(*,*) ' --- Do drydep now'
-          write(*,*) '     Use FULL PBL: ', Input_Opt%PBL_DRYDEP
-       endif
+!       if(Input_Opt%AmIRoot.and.NCALLS<3) THEN
+!          write(*,*) ' --- Do drydep now'
+!          write(*,*) '     Use FULL PBL: ', Input_Opt%PBL_DRYDEP
+!       endif
        CALL MAPL_TimerOn( STATE, 'GC_DRYDEP' )
 
        ! Do dry deposition
@@ -1194,7 +1329,7 @@ CONTAINS
        _ASSERT(RC==GC_SUCCESS, 'Error calling Do_DryDep')
 
        CALL MAPL_TimerOff( STATE, 'GC_DRYDEP' )
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Drydep done!'
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Drydep done!'
     ENDIF
 
     !=======================================================================
@@ -1215,7 +1350,7 @@ CONTAINS
        endif
 #endif
 
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Do emissions now'
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Do emissions now'
        CALL MAPL_TimerOn( STATE, 'GC_EMIS' )
 
        ! Do emissions. Pass HEMCO Phase 2 which performs the emissions
@@ -1226,7 +1361,7 @@ CONTAINS
        _ASSERT(RC==GC_SUCCESS, 'Error calling EMISSIONS_RUN')
 
        CALL MAPL_TimerOff( STATE, 'GC_EMIS' )
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Emissions done!'
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Emissions done!'
 
        ! Optional memory prints (level >= 3)
        if ( MemDebugLevel > 0 ) THEN
@@ -1247,7 +1382,7 @@ CONTAINS
     ! emissions time step here.
     !=======================================================================
     IF ( DoTend ) THEN
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*)   &
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*)   &
                            ' --- Add emissions and drydep to tracers'
        CALL MAPL_TimerOn( STATE, 'GC_FLUXES' )
 
@@ -1261,11 +1396,11 @@ CONTAINS
        _ASSERT(RC==GC_SUCCESS, 'Error calling DO_TEND')
 
        ! testing only
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*)   &
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*)   &
                                  '     Tendency time step [s]: ', DT
 
        CALL MAPL_TimerOff( STATE, 'GC_FLUXES' )
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*)   &
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*)   &
                                  ' --- Fluxes applied to tracers!'
     ENDIF ! Tendencies
 
@@ -1282,7 +1417,25 @@ CONTAINS
     ! friendly to this component!!
     !=======================================================================
     IF ( DoTurb ) THEN
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Do turbulence now'
+
+
+! Save state before mixing
+#if defined ( ADJOINT )
+   if (Is_Adjoint) & 
+   CALL Push_State(State_Chm,S_Pre_Mix,State_Grid%NX,State_Grid%NY,State_Grid%NZ,Input_Opt%NFD)
+
+!   if (debug_adjoint) &
+!     CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
+!         State_Grid, State_Met,State_Chm, trim(Iam) // ' fwd before mixing.', RC)
+
+#endif  
+
+
+
+   
+
+
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Do turbulence now'
        CALL MAPL_TimerOn( STATE, 'GC_TURB' )
 
        ! Only do the following for the non-local PBL mixing (VDIFF)
@@ -1317,8 +1470,10 @@ CONTAINS
                         State_Grid, State_Met, RC                           )
        _ASSERT(RC==GC_SUCCESS, 'Error calling DO_MIXING')
 
+ 
+
        CALL MAPL_TimerOff( STATE, 'GC_TURB' )
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Turbulence done!'
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Turbulence done!'
     ENDIF
 
     ! Set tropospheric CH4 concentrations and fill species array with
@@ -1334,11 +1489,12 @@ CONTAINS
        _ASSERT(RC==GC_SUCCESS, 'Error calling SET_CH4')
     ENDIF
 
+
     !=======================================================================
     ! 5. Chemistry
     !=======================================================================
     IF ( DoChem ) THEN
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Do chemistry now'
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Do chemistry now'
        CALL MAPL_TimerOn( STATE, 'GC_CHEM' )
 
        IF ( Input_Opt%ITS_A_FULLCHEM_SIM ) THEN
@@ -1371,7 +1527,7 @@ CONTAINS
        _ASSERT(RC==GC_SUCCESS, 'Error calling Do_Chemistr')
 
        CALL MAPL_TimerOff( STATE, 'GC_CHEM' )
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Chemistry done!'
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Chemistry done!'
 
        ! Optional memory prints (level >= 3)
        if ( MemDebugLevel > 0 ) THEN
@@ -1388,7 +1544,7 @@ CONTAINS
     ! 6. Wet deposition
     !=======================================================================
     IF ( DoWetDep ) THEN
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Do wetdep now'
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Do wetdep now'
        CALL MAPL_TimerOn( STATE, 'GC_WETDEP' )
 
        ! Do wet deposition
@@ -1397,7 +1553,7 @@ CONTAINS
        _ASSERT(RC==GC_SUCCESS, 'Error calling DO_WETDEP')
 
        CALL MAPL_TimerOff( STATE, 'GC_WETDEP' )
-       if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Wetdep done!'
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Wetdep done!'
     ENDIF
 
     !=======================================================================
@@ -1618,9 +1774,247 @@ CONTAINS
        If (State_Diag%Archive_RadSSAWL3        ) State_Diag%RadSSAWL3(:,:,:)       = MAPL_UNDEF 
        If (State_Diag%Archive_RadAsymWL3       ) State_Diag%RadAsymWL3(:,:,:)      = MAPL_UNDEF 
     ENDIF
+
 #endif
 
-    if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Do diagnostics now'
+! Save state at the end
+#if defined ( ADJOINT )
+   if (Is_Adjoint) & 
+   CALL Push_State(State_Chm,S_End,State_Grid%NX,State_Grid%NY,State_Grid%NZ,Input_Opt%NFD)
+ 
+!      if (debug_adjoint) &
+!     CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
+!         State_Grid, State_Met,State_Chm, trim(Iam) // ' fwd end.', RC)
+
+#endif  
+
+
+#if defined ( ADJOINT )
+   IF (Is_Adjoint) THEN
+       CALL Print_Global_Species_Kg( I_DBG, J_DBG, L_DBG,           &
+                                                               'CO2', Input_Opt, State_Chm,   &
+                                                               State_Grid, State_Met, trim(Iam) // &
+                                                               'end of GCHP chunk', RC)
+   ENDIF
+
+!
+! ADJOINT RUN, RUN THE PROCESSES IN REVERSE
+!
+
+ IF (Is_Adjoint ) THEN
+     ! set the adjoint state of Input_Opt
+     Input_Opt%Is_Adjoint=Is_Adjoint
+
+     ! Load OCO-2 adjoint forcing from file and accumulate into SpeciesAdj
+     ! Use IsAdjTime (not IsChemTime) so forcing loads even when chemistry is off
+     ! The call at clock time t runs the adjoint of the forward step from t
+     ! to t+dt, so the adjoint state on entry is valid at t+dt: load the
+     ! forcing file stamped t+dt (observations of the state at t+dt).
+     IF ( IsAdjTime .AND. Input_Opt%ADJOINT_FROM_FILE ) THEN
+        CALL ESMF_TimeSet( frcTime, yy=year, mm=month, dd=day, h=hour,      &
+                           m=minute, s=second,                              &
+                           calkindflag=ESMF_CALKIND_GREGORIAN, rc=STATUS )
+        _VERIFY(STATUS)
+        CALL ESMF_TimeIntervalSet( frcDt, s=Input_Opt%TS_DYN, rc=STATUS )
+        _VERIFY(STATUS)
+        frcTime = frcTime + frcDt
+        CALL ESMF_TimeGet( frcTime, yy=frcYear, mm=frcMonth, dd=frcDay,     &
+                           h=frcHour, m=frcMinute, rc=STATUS )
+        _VERIFY(STATUS)
+        IF (Input_Opt%AmIRoot) WRITE(*,'(A,I4.4,2I2.2,A,2I2.2,A)')          &
+           ' Loading adjoint forcing stamped ', frcYear, frcMonth, frcDay,  &
+           '_', frcHour, frcMinute, 'z'
+        CALL Load_OCO2_Adjoint_Forcing( State_Chm, State_Grid, Input_Opt,   &
+                                        frcYear, frcMonth, frcDay,          &
+                                        frcHour, frcMinute, STATUS )
+        _VERIFY(STATUS)
+        IF (Input_Opt%AmIRoot) WRITE(*,*) 'Adjoint forcing loaded successfully'
+     ENDIF
+
+   !
+   ! 1. TURBULENCE
+   !
+     
+   IF ( DoTurb ) THEN
+      CALL Pop_State(S_Pre_Mix,State_Chm,Input_Opt%NFD)
+      
+      
+!     if (debug_adjoint) &
+!     CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
+!         State_Grid, State_Met,State_Chm, trim(Iam) // ' adjoint befor mixing.', RC)
+      
+      
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Do adjoint turbulence now'
+       CALL MAPL_TimerOn( STATE, 'GC_TURB_ADJ' )
+
+       ! Only do the following for the non-local PBL mixing
+       !IF ( Input_Opt%LNLPBL ) THEN
+
+          ! Once the initial met fields have been read in, we need to find
+          ! the maximum PBL level for the non-local mixing algorithm.
+          ! This only has to be done once. (bmy, 5/28/20)
+       !   IF ( FIRST ) THEN
+       !      CALL Max_PblHt_For_Vdiff( Input_Opt, State_Grid, State_Met, RC )
+       !      _ASSERT(RC==GC_SUCCESS, 'Error calling MAX_PBLHT_FOR_VDIFF')
+       !   ENDIF
+
+          ! Compute the surface flux for the non-local mixing,
+          ! (which means getting emissions & drydep from HEMCO)
+          ! and store it in State_Chm%Surface_Flux
+       !   CALL Compute_Sflx_For_Vdiff( Input_Opt,  State_Chm, State_Diag,    &
+       !                                State_Grid, State_Met, RC            )
+       !   _ASSERT(RC==GC_SUCCESS, 'Error calling COMPUTE_SFLX_FOR_VDIFF')
+       !ENDIF
+
+       ! Do mixing and apply tendencies. This will use the dynamic time step,
+       ! which is fine since this call will be executed on every time step.
+       CALL DO_MIXING ( Input_Opt, State_Chm, State_Diag,                    &
+                        State_Grid, State_Met, RC                           )
+       _ASSERT(RC==GC_SUCCESS, 'Error calling adjoint DO_MIXING')
+
+       CALL MAPL_TimerOff( STATE, 'GC_TURB_ADJ' )
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' ---  Adjoint turbulence done!'
+
+
+   ENDIF
+
+   ! The forward step adds the surface flux after convection and before
+   ! mixing (DO_TEND inside DO_MIXING). Its adjoint therefore needs the
+   ! surface-level adjoint as it is here: after the turbulence adjoint and
+   ! before the convection adjoint. Save it for Integrate_Srf_Adjoint.
+   IF ( DoEmis ) THEN
+      IF ( ALLOCATED( SfcAdj_PreConv ) ) DEALLOCATE( SfcAdj_PreConv )
+      ALLOCATE( SfcAdj_PreConv( State_Grid%NX, State_Grid%NY ) )
+      SfcAdj_PreConv = State_Chm%SpeciesAdj(:,:,1,Input_Opt%NFD)
+   ENDIF
+
+
+    !
+    ! 2. CONVECTION
+    !
+
+
+    IF ( DoConv ) THEN
+    
+    CALL Pop_State(S_Pre_Conv,State_Chm,Input_Opt%NFD)
+    
+!   if (debug_adjoint) &
+!     CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
+!         State_Grid, State_Met,State_Chm, trim(Iam) // ' adjoint before conv.', RC)
+      
+    
+    if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Do adjoint convection now'
+       CALL MAPL_TimerOn( STATE, 'GC_CONV_ADJ' )
+
+       CALL DO_CONVECTION ( Input_Opt, State_Chm, State_Diag, &
+                            State_Grid, State_Met, RC )
+       _ASSERT(RC==GC_SUCCESS, 'Error calling DO_CONVECTION')
+
+       CALL MAPL_TimerOff( STATE, 'GC_CONV_ADJ' )
+       if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Adjoint convection done!'
+ 
+
+    ENDIF
+
+
+
+!
+! Compute the Surface Adjoint
+!
+
+
+
+! Get Emission fluxes from HEMCO and store in HcoState
+! MIGHT NEED TO GET THE STATE PRIOR TO EMISSIONS_RUN
+
+! Run surface-flux adjoint only when emissions were active in forward.
+IF ( DoEmis ) THEN
+   HCO_PHASE = 1
+   CALL EMISSIONS_RUN( Input_Opt, State_Chm, State_Diag, &
+                       State_Grid, State_Met, .TRUE., HCO_PHASE, RC )
+   _ASSERT(RC==GC_SUCCESS, 'Error in EMISSIONS_RUN phase 1 (adjoint)')
+   HCO_PHASE = 2
+   CALL EMISSIONS_RUN( Input_Opt, State_Chm, State_Diag, &
+                       State_Grid, State_Met, .TRUE., HCO_PHASE, RC )
+   _ASSERT(RC==GC_SUCCESS, 'Error in EMISSIONS_RUN phase 2 (adjoint)')
+
+
+   ! Get surface flux and save in State_Chm%Surface_Flux
+   ! NEED TO MAKE SURE TO CLEANLY INCLUSE ONLY SURFACE EMISSIONS (NO DRY DEP) IN THIS FLUX !!
+   CALL Compute_Sflx_For_Adjoint( Input_Opt, State_Chm, State_Diag,    &
+                                  State_Grid, State_Met, RC            )
+   _ASSERT(RC==GC_SUCCESS, 'Error in Compute_Sflx_For_Adjoint (adjoint)')
+ENDIF
+
+
+!
+! Pop the final state back into State_Chm
+!
+
+  CALL Pop_State(S_End,State_Chm,Input_Opt%NFD)
+
+!   if (debug_adjoint) &
+!     CALL GCHP_PRINT_MET( I_DBG, J_DBG, L_DBG, Input_Opt,&
+!         State_Grid, State_Met,State_Chm, trim(Iam) // ' adjoint at the end.', RC)
+
+   IF ( DoEmis ) THEN
+      ! get the corresponding index from the mapping of NFD to advect slot
+      ! (State_Chm%SurfaceFlux is stored on advected species, and adjoint on the total number)
+      AdjSfluxNA = -1
+      DO N = 1, State_Chm%nAdvect
+         IF ( State_Chm%Map_Advect(N) == Input_Opt%NFD ) THEN
+            AdjSfluxNA = N
+            EXIT
+         ENDIF
+      ENDDO
+      _ASSERT(AdjSfluxNA > 0, 'Error mapping NFD to advect slot for Integrate_Srf_Adjoint')
+
+      ! Because we guard this with IF(DoEmis) which is true for a chemistry time step
+      ! the Integrate_Srf_Adjoint call will be every chemistry time step therefore dt = Input_Opt%TS_CHEM
+      CALL Integrate_Srf_Adjoint( Input_Opt, State_Chm, State_Grid, State_Met, &
+                                  State_Chm%SurfaceFlux(:,:,AdjSfluxNA),      &
+                      REAL( Input_Opt%TS_CHEM, fp ), SfcAdj_PreConv )
+      DEALLOCATE( SfcAdj_PreConv )
+   ENDIF
+
+! Reverse of AIRQNT mixing-ratio update:
+!   Conc_new = Conc_old * DP_DRY_PREV / DELP_DRY
+! so adjoints map as:
+!   SpeciesAdj_old += SpeciesAdj_new * DP_DRY_PREV / DELP_DRY
+
+   ! Adjoint of the forward AIRQNT mixing-ratio update, which is applied
+   ! at the start of the forward step whenever AirQnt updated the mixing
+   ! ratios (AirQntUpdatedMR: scaleMR, i.e. FV advection off, and the 14.8.0
+   ! global-sum test in AirQnt). DELP_DRY is restored from the checkpoint
+   ! before AIRQNT in adjoint mode, so DP_DRY_PREV and DELP_DRY hold the same
+   ! values as in the forward step. It is the first forward operation, hence
+   ! the last here.
+   IF ( AirQntUpdatedMR ) THEN
+      DO N = 1, State_Chm%nSpecies
+         DO L = 1, State_Grid%NZ
+            DO J = 1, State_Grid%NY
+               DO I = 1, State_Grid%NX
+                  IF ( State_Met%DELP_DRY(I,J,L) > 0.0_fp ) THEN
+                     State_Chm%SpeciesAdj(I,J,L,N) =                           &
+                          State_Chm%SpeciesAdj(I,J,L,N) *                      &
+                          State_Met%DP_DRY_PREV(I,J,L) / State_Met%DELP_DRY(I,J,L)
+                  ENDIF
+               ENDDO
+            ENDDO
+         ENDDO
+      ENDDO
+   ENDIF
+
+ENDIF ! IF (Is_Adjoint) THEN
+
+#endif
+
+
+
+
+
+
+   if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Do diagnostics now'
     CALL MAPL_TimerOn( STATE, 'GC_DIAGN' )
 
     ! Set certain diagnostics dependent on state at end of step. This
@@ -1648,11 +2042,11 @@ CONTAINS
 #endif
 
 #ifdef ADJOINT
-       if (Input_Opt%IS_FD_SPOT_THIS_PET .and. Input_opt%IFD > 0) THEN
+             if (Input_Opt%IS_FD_SPOT_THIS_PET .and. Input_opt%IFD > 0) THEN
        DO N = 1, State_Chm%nSpecies
           ThisSpc => State_Chm%SpcData(N)%Info
-          write(*,*) 'SpcAdj(', TRIM(thisSpc%Name), ') = ',  &
-               State_Chm%SpeciesAdj(Input_Opt%IFD,Input_Opt%JFD,Input_Opt%LFD,N)
+!          write(*,*) 'SpcAdj(', TRIM(thisSpc%Name), ') = ',  &
+!                State_Chm%SpeciesAdj(Input_Opt%IFD,Input_Opt%JFD,Input_Opt%LFD,N)
        ENDDO
        ENDIF
     !=======================================================================
@@ -1667,23 +2061,30 @@ CONTAINS
           ! Find the non-adjoint variable or this
           TRACNAME = ThisSpc%Name
 
-          State_Chm%SpeciesAdj(:,:,:,N) = State_Chm%SpeciesAdj(:,:,:,N) * State_Chm%Species(N)%Conc(:,:,:) * &
-               ( AIRMW / State_Chm%SpcData(N)%Info%MW_g )
+         ! Kay's comment - not sure we really want to multiply adjoint with the ICS 
+         ! State_Chm%SpeciesAdj(:,:,:,N) = State_Chm%SpeciesAdj(:,:,:,N) * State_Chm%Species(N)%Conc(:,:,:) * &
+         !      ( AIRMW / State_Chm%SpcData(N)%Info%MW_g )
 
-          if (Input_Opt%IS_FD_SPOT_THIS_PET .and. Input_Opt%IFD > 0) THEN
-             write(*,*) 'After conversion ',  &
-                  State_Chm%SpeciesAdj(Input_Opt%IFD,Input_Opt%JFD,Input_Opt%LFD,N)
+           if (Input_Opt%IS_FD_SPOT_THIS_PET .and. Input_Opt%IFD > 0) THEN
+!             write(*,*) 'After conversion ',  &
+!              State_Chm%SpeciesAdj(Input_Opt%IFD,Input_Opt%JFD,Input_Opt%LFD,N)
           ENDIF
        ENDDO
 
+    ENDIF
+    
+    IF (Input_Opt%IS_ADJOINT) THEN
        CALL Set_SpcAdj_Diagnostic( Input_Opt,  State_Chm, State_Diag,        &
                                    State_Grid, State_Met, RC                )
     ENDIF
 #endif
 
     CALL MAPL_TimerOff( STATE, 'GC_DIAGN' )
-    if(Input_Opt%AmIRoot.and.NCALLS<10) write(*,*) ' --- Diagnostics done!'
+    if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Diagnostics done!'
 
+
+    ! Adjoint Concentration will be multiplied with M_air/M_CO2 
+    !
     !=======================================================================
     ! Convert State_Chm%Species units back to original units
     !=======================================================================
@@ -1708,10 +2109,11 @@ CONTAINS
     !=======================================================================
 
     ! testing only
-    IF ( PHASE /= 1 .AND. NCALLS < 10 ) NCALLS = NCALLS + 1
+    IF ( PHASE /= 1 .AND. NCALLS < 3 ) NCALLS = NCALLS + 1
 
     ! First call is done
     FIRST = .FALSE.
+
 
     ! Return success
     RC = GC_SUCCESS
@@ -1721,7 +2123,7 @@ CONTAINS
 
 !BOP
   SUBROUTINE GCHP_PRINT_MET(I, J, L,         &
-       Input_Opt, State_Grid, State_Met, LOC, RC )
+       Input_Opt, State_Grid, State_Met,State_Chm,LOC, RC )
 
     !
     ! !USES:
@@ -1729,6 +2131,8 @@ CONTAINS
     USE State_Met_Mod,        ONLY : MetState
     USE Input_Opt_Mod,        ONLY : OptInput
     USE State_Grid_Mod,       ONLY : GrdState
+    USE State_Chm_Mod,        ONLY : ChmState, Ind_
+    USE Species_Mod,          ONLY : Species
 
     !
     ! !INPUT PARAMETERS:
@@ -1740,6 +2144,8 @@ CONTAINS
     TYPE(OptInput),   INTENT(IN)    :: Input_Opt ! Input Options object
     TYPE(GrdState),   INTENT(IN)    :: State_Grid! Grid State object
     TYPE(MetState),   INTENT(IN)    :: State_Met ! Meteorology State object
+    TYPE(ChmState),   INTENT(IN)    :: State_Chm
+    
     !
     ! !INPUT/OUTPUT PARAMETERS:
     !
@@ -1758,7 +2164,8 @@ CONTAINS
     ! !LOCAL VARIABLES:
     !
     CHARACTER(LEN=255) :: ErrorMsg, ThisLoc
-
+    INTEGER ::  N,IND
+    TYPE(Species), POINTER :: ThisSpc=>NULL()
 
     !=========================================================================
     ! GCHP_PRINT_MET begins here!
@@ -1801,11 +2208,30 @@ CONTAINS
        WRITE( 6, 115 ) 'AD',       State_Met%AD(I,J,L),        I, J, L
        WRITE( 6, 115 ) 'PREVSPHU', State_Met%SPHU_PREV(I,J,L), I, J, L
        WRITE( 6, 115 ) 'SPHU',     State_Met%SPHU(I,J,L),      I, J, L
+      
+       ! 3-D Chem fields & adjoints
+       DO N=1,State_Chm%nSpecies
+        ThisSpc=>State_Chm%SpcData(N)%Info
+        IND=IND_(TRIM(ThisSpc%Name))
+         WRITE (6, 115),TRIM(ThisSpc%NAME),State_Chm%Species(IND)%Conc(I,J,L),&
+              I,J,L
+         
+        WRITE (6, 118),'FAdj'//TRIM(ThisSpc%NAME),State_Chm%SurfaceFluxAdj(I,J,IND),&
+              I,J,IND
+
+        WRITE (6, 115),'FAdj'//TRIM(ThisSpc%NAME),State_Chm%SpeciesAdj(I,J,L,IND),&
+              I,J,L
+
+       ENDDO
+       
+       
+       
        ! terminator
        WRITE( 6, 120 )
     ENDIF
 114 FORMAT( 'Grid cell  for ', a8, ' = ', es24.16, ', I,J  = ',2I4 )
 115 FORMAT( 'Grid cell  for ', a8, ' = ', es24.16, ', I,J,L= ',3I4 )
+118 FORMAT( 'Grid cell  for ', a8, ' = ', es24.16, ', I,J,N= ',3I4 )
 120 FORMAT( / )
 
 

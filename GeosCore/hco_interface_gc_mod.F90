@@ -55,6 +55,9 @@ MODULE HCO_Interface_GC_Mod
   PUBLIC  :: HCOI_GC_WriteDiagn
   PUBLIC  :: Compute_Sflx_For_Vdiff
   PUBLIC  :: Set_DryDepVel_Diagnostics
+#ifdef ADJOINT
+   PUBLIC  :: Compute_Sflx_For_Adjoint
+#endif
 !
 ! !PRIVATE MEMBER FUNCTIONS:
 !
@@ -4803,6 +4806,7 @@ CONTAINS
       ! memory first.   This is achieved by attempting to retrieve a
       ! grid box while NOT in a parallel loop. Failure to load this will
       ! result in severe performance issues!! (hplin, 9/27/20)
+
       IF ( EmisSpec ) THEN
          CALL LoadHcoValEmis ( Input_Opt, State_Grid, NA )
       ENDIF
@@ -4829,13 +4833,13 @@ CONTAINS
         ! Add total emissions in the PBL to the EFLX array
         ! which tracks emission fluxes.  Units are [kg/m2/s].
         !------------------------------------------------------------------
-        IF ( EmisSpec ) THEN  ! Are there emissions for these species?
+        IF ( EmisSpec ) THEN
 
            ! Compute emissions for all other simulation
            tmpFlx = 0.0_fp
            DO L = 1, topMix
               CALL GetHcoValEmis( Input_Opt, State_Grid, NA,    I,           &
-                                  J,         L,          found, emis        )
+                                  J,         L,          found, emis         )
               IF ( .NOT. found ) EXIT
               tmpFlx = tmpFlx + emis
            ENDDO
@@ -4846,7 +4850,7 @@ CONTAINS
               tmpFlx = 0.0_fp
               DO L = 1, State_Grid%NZ
                  CALL GetHcoValEmis( Input_Opt, State_Grid, NA,    I,        &
-                                     J,         L,          found, emis     )
+                                     J,         L,          found, emis      )
                  IF ( .NOT. found ) EXIT
                  tmpFlx = tmpFlx + emis
               ENDDO
@@ -5053,13 +5057,16 @@ CONTAINS
     ENDDO 
     !$OMP END PARALLEL DO
 
-    !### Uncomment for debug output
-    !WRITE( 6, '(a)' ) 'eflx and dflx values HEMCO [kg/m2/s]'
-    !DO NA = 1, State_Chm%nAdvect
-    !   WRITE(6,*) 'eflx TRACER ', NA, ': ', SUM(eflx(:,:,NA))
-    !   WRITE(6,*) 'dflx TRACER ', NA, ': ', SUM(dflx(:,:,NA))
-    !   WRITE(6,*) 'sflx TRACER ', NA, ': ', SUM(State_Chm%SurfaceFlux(:,:,NA))
-    !ENDDO
+#ifdef ADJOINT
+   ! Debug: print direct HEMCO emissions (EFLX) and deposition (DFLX)
+   ! before any adjoint post-processing.
+   IF ( Input_Opt%amIRoot ) THEN
+      WRITE(6,*) 'HEMCO direct EFLX sum(all)=', SUM(eflx(:,:,:)),          &
+              ' max|EFLX|=', MAXVAL( ABS( eflx(:,:,:) ) )
+      WRITE(6,*) 'HEMCO direct DFLX sum(all)=', SUM(dflx(:,:,:)),          &
+              ' max|DFLX|=', MAXVAL( ABS( dflx(:,:,:) ) )
+   ENDIF
+#endif
 
     !=======================================================================
     ! DIAGNOSTICS: Compute drydep flux loss due to mixing [molec/cm2/s]
@@ -5176,6 +5183,266 @@ CONTAINS
     IF ( ASSOCIATED( PNOxLoss_HNO3 ) ) DEALLOCATE( PNOxLoss_HNO3 )
 
   END SUBROUTINE Compute_Sflx_For_Vdiff
+
+#ifdef ADJOINT
+!------------------------------------------------------------------------------
+!                   Harmonized Emissions Component (HEMCO)                    !
+!------------------------------------------------------------------------------
+!BOP
+!
+! !IROUTINE: Compute_Sflx_For_Adjoint
+!
+! !DESCRIPTION: Computes adjoint surface flux for the target species only.
+!  This routine is adjoint-only and intentionally uses only surface-layer
+!  emissions (L=1) without subtracting dry deposition.
+!  Input_Opt fields used here:
+!    NFD
+!    ADJ_HEMCO_SFLUX_ENABLED
+!  The ADJ_HEMCO_SFLUX_* values are read from GCHP.rc in GCHP_Chunk_Init.
+!EOP
+!------------------------------------------------------------------------------
+!BOC
+  SUBROUTINE Compute_Sflx_For_Adjoint( Input_Opt,  State_Chm, State_Diag,   &
+                                       State_Grid, State_Met, RC           )
+   USE ErrCode_Mod,          ONLY : GC_SUCCESS, GC_FAILURE, GC_Error
+      USE HCO_Diagn_Mod,        ONLY : HcoDiagn_AutoUpdate
+      USE HCO_Error_Mod,        ONLY : HCO_SUCCESS
+      USE HCO_State_GC_Mod,     ONLY : HcoState
+    USE HCO_Utilities_GC_Mod, ONLY : GetHcoValEmis, InquireHco
+    USE HCO_Utilities_GC_Mod, ONLY : LoadHcoValEmis
+    USE Input_Opt_Mod,        ONLY : OptInput
+    USE Species_Mod,          ONLY : Species
+    USE State_Chm_Mod,        ONLY : ChmState
+    USE State_Diag_Mod,       ONLY : DgnState
+    USE State_Grid_Mod,       ONLY : GrdState
+    USE State_Met_Mod,        ONLY : MetState
+
+    TYPE(OptInput),   INTENT(IN)    :: Input_Opt
+    TYPE(ChmState),   INTENT(INOUT) :: State_Chm
+    TYPE(DgnState),   INTENT(INOUT) :: State_Diag
+    TYPE(GrdState),   INTENT(IN)    :: State_Grid
+    TYPE(MetState),   INTENT(IN)    :: State_Met
+    INTEGER,          INTENT(INOUT) :: RC
+
+    LOGICAL                 :: EmisSpec, found
+   INTEGER                 :: I, J, N, NA, NFD, HMRC
+    REAL(fp)                :: emis
+    CHARACTER(LEN=255)      :: errMsg, thisLoc
+    TYPE(Species), POINTER  :: ThisSpc
+   REAL(f4), POINTER       :: AdjSurfaceFlux2D(:,:) => NULL()
+
+    thisLoc = 'Compute_Sflx_For_Adjoint ("hco_interface_gc_mod.f90")'
+    RC      = GC_SUCCESS
+
+    NFD = Input_Opt%NFD
+    IF ( NFD < 1 .OR. NFD > State_Chm%nSpecies ) THEN
+       errMsg = 'Invalid adjoint NFD in Compute_Sflx_For_Adjoint'
+       RC = GC_FAILURE
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    NA = -1
+    DO N = 1, State_Chm%nAdvect
+       IF ( State_Chm%Map_Advect(N) == NFD ) THEN
+          NA = N
+          EXIT
+       ENDIF
+    ENDDO
+    IF ( NA < 1 ) THEN
+      errMsg = 'Failed mapping NFD to nAdvect slot in Compute_Sflx_For_Adjoint'
+      RC = GC_FAILURE
+      CALL GC_Error( errMsg, RC, thisLoc )
+      RETURN
+    ENDIF
+
+    IF ( .NOT. ASSOCIATED( State_Chm%SurfaceFlux ) ) THEN
+      errMsg = 'State_Chm%SurfaceFlux is not associated in Compute_Sflx_For_Adjoint'
+      RC = GC_FAILURE
+      CALL GC_Error( errMsg, RC, thisLoc )
+      RETURN
+    ENDIF
+
+    ! This adjoint pathway updates only the target species slot.
+    State_Chm%SurfaceFlux(:,:,NA) = 0.0_fp
+
+    ThisSpc => State_Chm%SpcData(NFD)%Info
+
+    CALL InquireHco( NFD, Emis = EmisSpec )
+
+   AdjSurfaceFlux2D => NULL()
+    IF ( Input_Opt%ADJ_HEMCO_SFLUX_ENABLED ) THEN
+       ! Ensure diagnostics with AutoFill are current at this timestamp
+       ! before attempting DIAGN/FILTERED adjoint flux retrieval.
+       HMRC = HCO_SUCCESS
+       CALL HcoDiagn_AutoUpdate( HcoState, HMRC )
+       IF ( HMRC /= HCO_SUCCESS ) THEN
+          errMsg = 'Error updating HEMCO AutoFill diagnostics for adjoint flux retrieval'
+          RC = GC_FAILURE
+          CALL GC_Error( errMsg, RC, thisLoc )
+          ThisSpc => NULL()
+          RETURN
+       ENDIF
+
+       CALL Get_Adjoint_Hemco_SurfaceFlux( Input_Opt, State_Grid, NFD,      &
+                                           TRIM( ThisSpc%Name ),             &
+                                           AdjSurfaceFlux2D, RC )
+       IF ( RC /= GC_SUCCESS ) THEN
+          errMsg = 'Error retrieving adjoint-selected HEMCO surface flux'
+          CALL GC_Error( errMsg, RC, thisLoc )
+          ThisSpc => NULL()
+          RETURN
+       ENDIF
+    ENDIF
+
+    IF ( ASSOCIATED( AdjSurfaceFlux2D ) ) THEN
+       DO J = 1, State_Grid%NY
+       DO I = 1, State_Grid%NX
+          State_Chm%SurfaceFlux(I,J,NA) = REAL( AdjSurfaceFlux2D(I,J), fp )
+       ENDDO
+       ENDDO
+    ELSEIF ( EmisSpec ) THEN
+       CALL LoadHcoValEmis( Input_Opt, State_Grid, NA )
+       DO J = 1, State_Grid%NY
+       DO I = 1, State_Grid%NX
+          CALL GetHcoValEmis( Input_Opt, State_Grid, NA, I, J, 1, found, emis )
+          IF ( found ) State_Chm%SurfaceFlux(I,J,NA) = emis
+       ENDDO
+       ENDDO
+    ENDIF
+
+    ThisSpc => NULL()
+
+  END SUBROUTINE Compute_Sflx_For_Adjoint
+
+!------------------------------------------------------------------------------
+!                   Harmonized Emissions Component (HEMCO)                    !
+!------------------------------------------------------------------------------
+!BOP
+!
+! !IROUTINE: Get_Adjoint_Hemco_SurfaceFlux
+!
+! !DESCRIPTION: Retrieves the HEMCO emission field selected for the adjoint
+!  surface-flux calculation. This controls the actual contents of
+!  State_Chm%SurfaceFlux for the adjointed species.
+!  Input_Opt fields used here:
+!    ADJ_HEMCO_SFLUX_ENABLED
+!    ADJ_HEMCO_SFLUX_SELECTOR
+!    ADJ_HEMCO_SFLUX_DIAGN
+!    ADJ_HEMCO_SFLUX_EXTNAME
+!    ADJ_HEMCO_SFLUX_CAT
+!    ADJ_HEMCO_SFLUX_HIER
+!  These values are read from GCHP.rc in GCHP_Chunk_Init.
+!EOP
+!------------------------------------------------------------------------------
+!BOC
+  SUBROUTINE Get_Adjoint_Hemco_SurfaceFlux( Input_Opt, State_Grid, HcoID,    &
+                                            SpeciesName, Ptr2D, RC )
+    USE ErrCode_Mod,          ONLY : GC_SUCCESS, GC_FAILURE
+    USE HCO_Diagn_Mod,        ONLY : Diagn_Create
+    USE HCO_Error_Mod,        ONLY : HCO_SUCCESS
+    USE HCO_ExtList_Mod,      ONLY : GetExtNr
+    USE HCO_State_GC_Mod,     ONLY : HcoState
+    USE HCO_Utilities_GC_Mod, ONLY : HCO_GC_GetDiagn
+    USE Input_Opt_Mod,        ONLY : OptInput
+    USE State_Grid_Mod,       ONLY : GrdState
+
+    TYPE(OptInput),   INTENT(IN)    :: Input_Opt
+    TYPE(GrdState),   INTENT(IN)    :: State_Grid
+    INTEGER,          INTENT(IN)    :: HcoID
+    CHARACTER(LEN=*), INTENT(IN)    :: SpeciesName
+   REAL(f4),         POINTER       :: Ptr2D(:,:)
+    INTEGER,          INTENT(INOUT) :: RC
+
+   INTEGER                   :: STATUS, ExtNr, Cat, Hier, DgnCol
+    CHARACTER(LEN=255)         :: DiagnName
+
+   Ptr2D => NULL()
+    RC    = GC_SUCCESS
+
+    IF ( .NOT. Input_Opt%ADJ_HEMCO_SFLUX_ENABLED ) RETURN
+    IF ( .NOT. ASSOCIATED( HcoState ) ) THEN
+       RC = GC_FAILURE
+       RETURN
+    ENDIF
+
+    SELECT CASE ( TRIM( Input_Opt%ADJ_HEMCO_SFLUX_SELECTOR ) )
+    CASE ( 'DIAGN' )
+       DiagnName = TRIM( Input_Opt%ADJ_HEMCO_SFLUX_DIAGN )
+       DgnCol    = HcoState%Diagn%HcoDiagnIDDefault
+       IF ( DiagnName == '' ) THEN
+          RC = GC_FAILURE
+          RETURN
+       ENDIF
+
+    CASE ( 'TOTAL' )
+       ! TOTAL mode: return NULL and let Compute_Sflx_For_Adjoint fall through
+       ! to the LoadHcoValEmis/GetHcoValEmis path, which already sums the full
+       ! HEMCO emission flux for the species.  Creating an AutoFill diagnostic
+       ! here and immediately reading it fails because HEMCO only populates
+       ! AutoFill diagnostics during its own emission cycle, which has already
+       ! completed by the time this routine is called.
+       RETURN
+
+    CASE ( 'FILTERED' )
+       DiagnName = 'ADJ_HEMCO_SFLX_' // TRIM( SpeciesName )
+       DgnCol = HcoState%Diagn%HcoDiagnIDDefault
+       ExtNr = -1
+       Cat   = Input_Opt%ADJ_HEMCO_SFLUX_CAT
+       Hier  = Input_Opt%ADJ_HEMCO_SFLUX_HIER
+
+       IF ( TRIM( Input_Opt%ADJ_HEMCO_SFLUX_EXTNAME ) /= '' ) THEN
+          ExtNr = GetExtNr( HcoState%Config%ExtList,                         &
+                            TRIM( Input_Opt%ADJ_HEMCO_SFLUX_EXTNAME ) )
+          IF ( ExtNr == -999 ) THEN
+             RC = GC_FAILURE
+             RETURN
+          ENDIF
+       ENDIF
+
+       IF ( ExtNr < 0 .AND. Cat <= 0 .AND. Hier <= 0 ) THEN
+          RC = GC_FAILURE
+          RETURN
+       ENDIF
+
+       STATUS = GC_SUCCESS
+       CALL Diagn_Create( HcoState  = HcoState,                             &
+                          cName     = TRIM( DiagnName ),                    &
+                          ExtNr     = ExtNr,                                &
+                          Cat       = Cat,                                  &
+                          Hier      = Hier,                                 &
+                          HcoID     = HcoID,                                &
+                          SpaceDim  = 2,                                    &
+                          OutUnit   = 'kg/m2/s',                            &
+                          COL       = DgnCol,                               &
+                          AutoFill  = 1,                                    &
+                          OkIfExist = .TRUE.,                               &
+                          RC        = STATUS )
+       IF ( STATUS /= HCO_SUCCESS ) THEN
+          RC = GC_FAILURE
+          RETURN
+       ENDIF
+
+    CASE DEFAULT
+       RC = GC_FAILURE
+       RETURN
+    END SELECT
+
+    STATUS = GC_SUCCESS
+    CALL HCO_GC_GetDiagn( Input_Opt       = Input_Opt,                      &
+                          State_Grid      = State_Grid,                     &
+                          DiagnName       = TRIM( DiagnName ),              &
+                          StopIfNotFound  = .TRUE.,                         &
+                          RC              = STATUS,                         &
+                          Ptr2D           = Ptr2D,                          &
+                          COL             = DgnCol )
+    IF ( STATUS /= GC_SUCCESS ) THEN
+       Ptr2D => NULL()
+       RC = GC_FAILURE
+       RETURN
+    ENDIF
+  END SUBROUTINE Get_Adjoint_Hemco_SurfaceFlux
+#endif
 !EOC
 !------------------------------------------------------------------------------
 !                  GEOS-Chem Global Chemical Transport Model                  !
