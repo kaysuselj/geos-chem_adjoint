@@ -1437,6 +1437,7 @@ CONTAINS
        SpcInfo => NULL()
     ENDDO                  ! End loop over advected species
 
+#ifdef ADJOINT
 ELSE 
 !   
 ! ADJOINT CALCULATION
@@ -1864,6 +1865,7 @@ ENDIF
  ! DEALLOCATE(dqrcu)
  ! DEALLOCATE(reevapcn)
 
+#endif
 ENDIF
 
     !================================================================

@@ -1146,6 +1146,10 @@ CONTAINS
     _VERIFY(status)
     CALL MAPL_TimerAdd(GC, NAME="CP_AFTR", RC=status)
     _VERIFY(status)
+    CALL MAPL_TimerAdd(GC, NAME="CKPT_READ", RC=status)    ! adjoint checkpoint read
+    _VERIFY(status)
+    CALL MAPL_TimerAdd(GC, NAME="CKPT_WRITE", RC=status)   ! adjoint checkpoint write
+    _VERIFY(status)
 
     ! More timers to be called in gchp_chunk_run
     CALL MAPL_TimerAdd(GC, NAME="GC_CONV"  , __RC__)
@@ -2750,7 +2754,9 @@ CONTAINS
                 endif
                 
 
+                CALL MAPL_TimerOn(STATE, "CKPT_READ")
                 call Adjoint_StateRefresh( GC, IMPORT, EXPORT, CLOCK, RC )
+                CALL MAPL_TimerOff(STATE, "CKPT_READ")
                 ! Loop over all species and get info from spc db
                 DO N = 1, State_Chm%nSpecies
                    ThisSpc => State_Chm%SpcData(N)%Info
@@ -2800,7 +2806,9 @@ CONTAINS
 
              ELSE
                 call WRITE_PARALLEL('  Recording state to checkpoint file')
+                CALL MAPL_TimerOn(STATE, "CKPT_WRITE")
                 call Adjoint_StateRecord( GC, IMPORT, EXPORT, CLOCK, RC )
+                CALL MAPL_TimerOff(STATE, "CKPT_WRITE")
                 ! call WRITE_PARALLEL('  Done recording state to checkpoint files')
              ENDIF
           ENDIF
@@ -4450,6 +4458,55 @@ CONTAINS
 
    end subroutine Adjoint_RefreshExports
 
+   subroutine Adjoint_CkptSubset( INTERNAL, CKPT, RC )
+     ! Subset of the internal state for the adjoint checkpoints (GCHP.rc ADJ_CKPT_REDUCED: 1):
+     ! all 2-D fields, DELP_DRY, BXHEIGHT and SPC_<species> of ADVECTED species only. The
+     ! non-advected species and the full-chemistry 3-D fields (KPPHvalue, AeroH2O_SNA,
+     ! H2O2AfterChem, SO2AfterChem, ORVCSESQ, STATE_PSC) are not used by a CO2 adjoint step.
+     ! The subset holds references to the internal fields: reading into it updates INTERNAL.
+     type(ESMF_State),  intent(inout) :: INTERNAL
+     type(ESMF_State),  intent(out)   :: CKPT
+     integer, optional, intent(out)   :: RC
+     character(len=ESMF_MAXSTR)                  :: IAm = 'Adjoint_CkptSubset'
+     character(len=ESMF_MAXSTR), allocatable     :: names(:)
+     type(ESMF_StateItem_Flag),  allocatable     :: types(:)
+     type(ESMF_Field)                            :: field
+     integer                                     :: itemCount, i, rank, ind, STATUS
+     integer                                     :: gridBits, rstReq
+     logical                                     :: keep, isPresent
+     character(len=ESMF_MAXSTR)                  :: positive
+     call ESMF_StateGet( INTERNAL, itemCount=itemCount, __RC__ )
+     allocate( names(itemCount), types(itemCount) )
+     call ESMF_StateGet( INTERNAL, itemNameList=names, itemTypeList=types, __RC__ )
+     CKPT = ESMF_StateCreate( name='GCHPchem_adjoint_checkpoint', __RC__ )
+     ! state attributes MAPL checkpoint write/read expect (set by MAPL_StateCreateFromSpec)
+     call ESMF_AttributeGet( INTERNAL, NAME='MAPL_GridTypeBits', VALUE=gridBits, __RC__ )
+     call ESMF_AttributeSet( CKPT,     NAME='MAPL_GridTypeBits', VALUE=gridBits, __RC__ )
+     call ESMF_AttributeGet( INTERNAL, NAME='POSITIVE', VALUE=positive, __RC__ )   ! level order, read by NCIO
+     call ESMF_AttributeSet( CKPT,     NAME='POSITIVE', VALUE=positive, __RC__ )
+     call ESMF_AttributeGet( INTERNAL, NAME='MAPL_RestartRequired', isPresent=isPresent, __RC__ )
+     if ( isPresent ) then
+        call ESMF_AttributeGet( INTERNAL, NAME='MAPL_RestartRequired', VALUE=rstReq, __RC__ )
+        call ESMF_AttributeSet( CKPT,     NAME='MAPL_RestartRequired', VALUE=rstReq, __RC__ )
+     endif
+     do i = 1, itemCount
+        if ( types(i) /= ESMF_STATEITEM_FIELD ) cycle
+        call ESMF_StateGet( INTERNAL, trim(names(i)), field, __RC__ )
+        call ESMF_FieldGet( field, rank=rank, __RC__ )
+        keep = ( rank < 3 ) .or. trim(names(i)) == 'DELP_DRY' .or. trim(names(i)) == 'BXHEIGHT'
+        if ( len_trim(names(i)) > 4 ) then
+           if ( names(i)(1:4) == 'SPC_' ) then
+              ind  = IND_( trim(names(i)(5:)) )
+              keep = .false.
+              if ( ind > 0 ) keep = State_Chm%SpcData(ind)%Info%Is_Advected
+           endif
+        endif
+        if ( keep ) call ESMF_StateAdd( CKPT, [field], __RC__ )
+     enddo
+     deallocate( names, types )
+     _RETURN(ESMF_SUCCESS)
+   end subroutine Adjoint_CkptSubset
+
    subroutine Adjoint_StateRecord( GC, IMPORT, EXPORT, CLOCK, RC )
 
      ! !ARGUMENTS:
@@ -4471,6 +4528,8 @@ CONTAINS
 
      type (MAPL_MetaComp), pointer               :: STATE
      type (ESMF_State)                           :: INTERNAL
+     type (ESMF_State)                           :: CKPT     ! ADJ_CKPT_REDUCED subset
+     integer                                     :: reduced
      integer                                     :: hdr
      character(len=ESMF_MAXSTR)                  :: FILETYPE
      character(len=ESMF_MAXSTR)                  :: FNAME, DATESTAMP
@@ -4515,11 +4574,19 @@ CONTAINS
 
      FNAME = 'gcadj_internal_checkpoint.' // trim(datestamp) // '.nc4'
 
-     call MAPL_CheckpointState(INTERNAL, CLOCK, &
-          FNAME, &
-          FILETYPE, STATE, hdr/=0, &
-          RC=STATUS)
-     _VERIFY(STATUS)
+     call MAPL_GetResource( STATE, reduced, label='ADJ_CKPT_REDUCED:', default=0, __RC__ )
+     if ( reduced == 1 ) then
+        call Adjoint_CkptSubset( INTERNAL, CKPT, __RC__ )
+        call MAPL_CheckpointState(CKPT, CLOCK, FNAME, FILETYPE, STATE, hdr/=0, RC=STATUS)
+        _VERIFY(STATUS)
+        call ESMF_StateDestroy( CKPT, __RC__ )
+     else
+        call MAPL_CheckpointState(INTERNAL, CLOCK, &
+             FNAME, &
+             FILETYPE, STATE, hdr/=0, &
+             RC=STATUS)
+        _VERIFY(STATUS)
+     endif
 
 
      _RETURN(ESMF_SUCCESS)
@@ -4546,6 +4613,8 @@ CONTAINS
 
      type (MAPL_MetaComp), pointer               :: STATE
      type (ESMF_State)                           :: INTERNAL
+     type (ESMF_State)                           :: CKPT     ! ADJ_CKPT_REDUCED subset
+     integer                                     :: reduced
      integer                                     :: hdr
      integer                                     :: unit
    logical                                     :: fileExists
@@ -4606,10 +4675,18 @@ CONTAINS
         _VERIFY(STATUS)
      ENDIF
 
-     call MAPL_ESMFStateReadFromFile(INTERNAL, CLOCK, &
-          FNAME, &
-          STATE, hdr/=0, RC=STATUS)
-     _VERIFY(STATUS)
+     call MAPL_GetResource( STATE, reduced, label='ADJ_CKPT_REDUCED:', default=0, __RC__ )
+     if ( reduced == 1 ) then
+        call Adjoint_CkptSubset( INTERNAL, CKPT, __RC__ )
+        call MAPL_ESMFStateReadFromFile(CKPT, CLOCK, FNAME, STATE, hdr/=0, RC=STATUS)
+        _VERIFY(STATUS)
+        call ESMF_StateDestroy( CKPT, __RC__ )
+     else
+        call MAPL_ESMFStateReadFromFile(INTERNAL, CLOCK, &
+             FNAME, &
+             STATE, hdr/=0, RC=STATUS)
+        _VERIFY(STATUS)
+     endif
      IF (FNAME(1:1) .eq. '-' .or. &
           FNAME(1:1) .eq. '+') THEN
         UNIT = GETFILE(FNAME(2:), RC=STATUS)

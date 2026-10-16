@@ -1,3 +1,5 @@
+! Whole module only in ADJOINT builds (plain builds: empty object; all users are under #ifdef ADJOINT)
+#ifdef ADJOINT
 MODULE Adjoint_Utils_Mod
 
         
@@ -834,3 +836,4 @@ END SUBROUTINE Integrate_Srf_Adjoint
 
 
 END MODULE Adjoint_Utils_Mod
+#endif

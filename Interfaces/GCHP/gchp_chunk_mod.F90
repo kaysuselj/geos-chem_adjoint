@@ -2216,11 +2216,13 @@ ENDIF ! IF (Is_Adjoint) THEN
          WRITE (6, 115),TRIM(ThisSpc%NAME),State_Chm%Species(IND)%Conc(I,J,L),&
               I,J,L
          
+#ifdef ADJOINT
         WRITE (6, 118),'FAdj'//TRIM(ThisSpc%NAME),State_Chm%SurfaceFluxAdj(I,J,IND),&
               I,J,IND
 
         WRITE (6, 115),'FAdj'//TRIM(ThisSpc%NAME),State_Chm%SpeciesAdj(I,J,L,IND),&
               I,J,L
+#endif
 
        ENDDO
        
