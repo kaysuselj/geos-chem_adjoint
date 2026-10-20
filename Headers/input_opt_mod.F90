@@ -467,6 +467,10 @@ MODULE Input_Opt_Mod
     INTEGER                     :: ADJ_HEMCO_SFLUX_CAT
     ! Optional HEMCO category used by FILTERED mode.
     INTEGER                     :: ADJ_HEMCO_SFLUX_HIER
+    ! Second adjoint surface flux (e.g. the ocean flux for a second 4D-Var control field):
+    !   ADJ_HEMCO_SFLUX2_DIAGN: HEMCO diagnostic of that flux (DIAGN mode); '' = off
+    LOGICAL                     :: ADJ_HEMCO_SFLUX2_ENABLED
+    CHARACTER(LEN=255)          :: ADJ_HEMCO_SFLUX2_DIAGN
     ! Optional HEMCO hierarchy used by FILTERED mode.
 #endif
 
@@ -984,6 +988,8 @@ CONTAINS
     Input_Opt%ADJ_HEMCO_SFLUX_EXTNAME  = ''
     Input_Opt%ADJ_HEMCO_SFLUX_CAT      = -1
     Input_Opt%ADJ_HEMCO_SFLUX_HIER     = -1
+    Input_Opt%ADJ_HEMCO_SFLUX2_ENABLED = .FALSE.
+    Input_Opt%ADJ_HEMCO_SFLUX2_DIAGN   = ''
 #endif
 
     !----------------------------------------

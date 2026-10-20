@@ -142,7 +142,8 @@ CONTAINS
     !-----------------------------------------------------------------------
     ! Set species concentration diagnostic in units specified in state_diag_mod
     !-----------------------------------------------------------------------
-    IF ( State_Diag%Archive_SpeciesAdj .OR. State_Diag%Archive_SurfaceFluxAdj ) THEN
+    IF ( State_Diag%Archive_SpeciesAdj .OR. State_Diag%Archive_SurfaceFluxAdj .OR. &
+         State_Diag%Archive_SurfaceFluxAdj2 ) THEN
        CALL Set_SpcAdj_Diagnostic( Input_Opt,  State_Chm, State_Diag,         &
                                    State_Grid, State_Met, RC                 )
 
@@ -526,6 +527,15 @@ CONTAINS
           mapData => NULL()
        ENDIF
 
+       ! --- SurfaceFluxAdj2 (second adjoint surface flux), as SurfaceFluxAdj ---
+       IF ( State_Diag%Archive_SurfaceFluxAdj2 ) THEN
+          mapData => State_Diag%Map_SurfaceFluxAdj2
+          DO S = 1, mapData%nSlots
+             N = mapData%slot2id(S)
+             State_Diag%SurfaceFluxAdj2(:,:,S) = State_Chm%SurfaceFluxAdj2(:,:,N)
+          ENDDO
+          mapData => NULL()
+       ENDIF
     ENDIF
 
     !=======================================================================

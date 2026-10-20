@@ -5209,7 +5209,7 @@ CONTAINS
       USE HCO_Error_Mod,        ONLY : HCO_SUCCESS
       USE HCO_State_GC_Mod,     ONLY : HcoState
     USE HCO_Utilities_GC_Mod, ONLY : GetHcoValEmis, InquireHco
-    USE HCO_Utilities_GC_Mod, ONLY : LoadHcoValEmis
+    USE HCO_Utilities_GC_Mod, ONLY : LoadHcoValEmis, HCO_GC_GetDiagn
     USE Input_Opt_Mod,        ONLY : OptInput
     USE Species_Mod,          ONLY : Species
     USE State_Chm_Mod,        ONLY : ChmState
@@ -5311,8 +5311,43 @@ CONTAINS
        ENDDO
     ENDIF
 
+    ! second adjoint surface flux (ADJ_HEMCO_SFLUX2_DIAGN, e.g. EmisCO2_Ocean) -> State_Chm%SurfaceFlux2
+    IF ( Input_Opt%ADJ_HEMCO_SFLUX2_ENABLED .AND. ASSOCIATED( State_Chm%SurfaceFlux2 ) ) THEN
+       State_Chm%SurfaceFlux2(:,:,NA) = 0.0_fp
+       IF ( .NOT. Input_Opt%ADJ_HEMCO_SFLUX_ENABLED ) THEN       ! AutoFill update not done above
+          HMRC = HCO_SUCCESS
+          CALL HcoDiagn_AutoUpdate( HcoState, HMRC )
+          IF ( HMRC /= HCO_SUCCESS ) THEN
+             errMsg = 'Error updating HEMCO AutoFill diagnostics for the second adjoint flux'
+             RC = GC_FAILURE
+             CALL GC_Error( errMsg, RC, thisLoc )
+             ThisSpc => NULL()
+             RETURN
+          ENDIF
+       ENDIF
+       AdjSurfaceFlux2D => NULL()
+       HMRC = GC_SUCCESS
+       CALL HCO_GC_GetDiagn( Input_Opt       = Input_Opt,                      &
+                             State_Grid      = State_Grid,                     &
+                             DiagnName       = TRIM( Input_Opt%ADJ_HEMCO_SFLUX2_DIAGN ), &
+                             StopIfNotFound  = .TRUE.,                         &
+                             RC              = HMRC,                           &
+                             Ptr2D           = AdjSurfaceFlux2D,               &
+                             COL             = HcoState%Diagn%HcoDiagnIDDefault )
+       IF ( HMRC /= GC_SUCCESS .OR. .NOT. ASSOCIATED( AdjSurfaceFlux2D ) ) THEN
+          errMsg = 'Error retrieving the second adjoint surface flux ' // TRIM( Input_Opt%ADJ_HEMCO_SFLUX2_DIAGN )
+          RC = GC_FAILURE
+          CALL GC_Error( errMsg, RC, thisLoc )
+          ThisSpc => NULL()
+          RETURN
+       ENDIF
+       DO J = 1, State_Grid%NY
+       DO I = 1, State_Grid%NX
+          State_Chm%SurfaceFlux2(I,J,NA) = REAL( AdjSurfaceFlux2D(I,J), fp )
+       ENDDO
+       ENDDO
+    ENDIF
     ThisSpc => NULL()
-
   END SUBROUTINE Compute_Sflx_For_Adjoint
 
 !------------------------------------------------------------------------------

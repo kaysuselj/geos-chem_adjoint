@@ -464,6 +464,12 @@ CONTAINS
          Input_Opt%ADJ_HEMCO_SFLUX_ENABLED  =                                &
             Input_Opt%ADJ_HEMCO_SFLUX_SELECTOR /= '' .AND.                 &
             Input_Opt%ADJ_HEMCO_SFLUX_SELECTOR /= 'NONE'
+         ! second adjoint surface flux (SurfaceFluxAdj2), DIAGN mode only
+         CALL ESMF_ConfigGetAttribute( CF, AdjSfluxDiagn,                   &
+            Label="ADJ_HEMCO_SFLUX2_DIAGN:", Default='', RC=STATUS )
+         _VERIFY(STATUS)
+         Input_Opt%ADJ_HEMCO_SFLUX2_DIAGN   = TRIM( ADJUSTL( AdjSfluxDiagn ) )
+         Input_Opt%ADJ_HEMCO_SFLUX2_ENABLED = Input_Opt%ADJ_HEMCO_SFLUX2_DIAGN /= ''
         ENDIF
 
        call ESMF_ConfigGetAttribute(CF, LFD, &

@@ -129,6 +129,8 @@ MODULE State_Chm_Mod
      REAL(fp),          POINTER :: SpeciesAdj (:,:,:,:) ! Species adjoint variables
      REAL(fp),          POINTER :: CostFuncMask(:,:,:)  ! cost function volume mask
      REAL(fp),           POINTER :: SurfaceFluxAdj(:,:,:) ! Adjoint of surface fluxes
+     REAL(fp),           POINTER :: SurfaceFluxAdj2(:,:,:) ! Adjoint of the second surface flux (ADJ_HEMCO_SFLUX2)
+     REAL(fp),           POINTER :: SurfaceFlux2(:,:,:)    ! second surface flux (advected species slots)
 #endif
 
      !----------------------------------------------------------------------
@@ -516,6 +518,8 @@ CONTAINS
     State_Chm%SpeciesAdj    => NULL()
     State_Chm%CostFuncMask  => NULL()
     State_Chm%SurfaceFluxAdj => NULL()
+    State_Chm%SurfaceFluxAdj2 => NULL()
+    State_Chm%SurfaceFlux2    => NULL()
 #endif
 
     ! Photolysis state
@@ -1046,6 +1050,38 @@ CONTAINS
          RC         = RC                                                     &
                             )
 
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( chmId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    ! second adjoint surface flux (ADJ_HEMCO_SFLUX2_DIAGN), same layout as SurfaceFluxAdj / SurfaceFlux
+    chmID = 'SurfaceFluxAdj2'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Chm  = State_Chm,                                             &
+         State_Grid = State_Grid,                                            &
+         chmId      = chmId,                                                 &
+         Ptr2Data   = State_Chm%SurfaceFluxAdj2,                             &
+         nSlots     = State_Chm%nSpecies,                                    &
+         RC         = RC                                                     &
+                            )
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( chmId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+    chmID = 'SurfaceFlux2'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Chm  = State_Chm,                                             &
+         State_Grid = State_Grid,                                            &
+         chmId      = chmId,                                                 &
+         Ptr2Data   = State_Chm%SurfaceFlux2,                                &
+         nSlots     = State_Chm%nAdvect,                                     &
+         RC         = RC                                                     &
+                            )
     IF ( RC /= GC_SUCCESS ) THEN
        errMsg = TRIM( errMsg_ir ) // TRIM( chmId )
        CALL GC_Error( errMsg, RC, thisLoc )
@@ -4204,8 +4240,19 @@ CONTAINS
        CALL GC_CheckVar( 'State_Chm%SurfaceFluxAdj', 2, RC )
        IF ( RC /= GC_SUCCESS ) RETURN
        State_Chm%SurfaceFluxAdj => NULL()
-    ENDIF   
-    
+    ENDIF
+    IF ( ASSOCIATED( State_Chm%SurfaceFluxAdj2 ) ) THEN
+       DEALLOCATE( State_Chm%SurfaceFluxAdj2, STAT=RC  )
+       CALL GC_CheckVar( 'State_Chm%SurfaceFluxAdj2', 2, RC )
+       IF ( RC /= GC_SUCCESS ) RETURN
+       State_Chm%SurfaceFluxAdj2 => NULL()
+    ENDIF
+    IF ( ASSOCIATED( State_Chm%SurfaceFlux2 ) ) THEN
+       DEALLOCATE( State_Chm%SurfaceFlux2, STAT=RC  )
+       CALL GC_CheckVar( 'State_Chm%SurfaceFlux2', 2, RC )
+       IF ( RC /= GC_SUCCESS ) RETURN
+       State_Chm%SurfaceFlux2 => NULL()
+    ENDIF
 #endif    
 
 
@@ -4364,6 +4411,16 @@ CONTAINS
           IF ( isDesc    ) Desc  = 'Cost function volume mask'
           IF ( isUnits   ) Units = 'none'
           IF ( isRank    ) Rank  = 3
+       CASE ( 'SURFACEFLUXADJ2' )
+          IF ( isDesc   ) Desc   = 'Adjoint sensitivity to the second surface flux (ADJ_HEMCO_SFLUX2)'
+          IF ( isUnits  ) Units  = 'none'
+          IF ( isRank   ) Rank   = 2
+          IF ( isSpc    ) PerSpc = 'ALL'
+       CASE ( 'SURFACEFLUX2' )
+          IF ( isDesc   ) Desc   = 'Second surface flux for the adjoint (ADJ_HEMCO_SFLUX2)'
+          IF ( isUnits  ) Units  = 'kg m-2 s-1'
+          IF ( isRank   ) Rank   = 2
+          IF ( isSpc    ) PerSpc = 'ADV'
        CASE ( 'SURFACEFLUXADJ' )
           IF ( isDesc   ) Desc   = 'Adjoint sensitivity to Surface Fluxes'
           IF ( isUnits  ) Units  = 'none'  ! Kay: Is this correct??

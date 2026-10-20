@@ -138,7 +138,10 @@ MODULE State_Diag_Mod
      
      REAL(f8),           POINTER :: SurfaceFluxAdj(:,:,:)
      TYPE(DgnMap),       POINTER :: Map_SurfaceFluxAdj
-     LOGICAL                     :: Archive_SurfaceFluxAdj 
+     LOGICAL                     :: Archive_SurfaceFluxAdj
+     REAL(f8),           POINTER :: SurfaceFluxAdj2(:,:,:)
+     TYPE(DgnMap),       POINTER :: Map_SurfaceFluxAdj2
+     LOGICAL                     :: Archive_SurfaceFluxAdj2
 #endif
 
      !%%%%% Budget diagnostics %%%%%
@@ -1594,6 +1597,9 @@ CONTAINS
     State_Diag%SurfaceFluxAdj                      => NULL()
     State_Diag%Map_SurfaceFluxAdj                  => NULL()
     State_Diag%Archive_SurfaceFluxAdj              = .FALSE.
+    State_Diag%SurfaceFluxAdj2                     => NULL()
+    State_Diag%Map_SurfaceFluxAdj2                 => NULL()
+    State_Diag%Archive_SurfaceFluxAdj2             = .FALSE.
 #endif
 
     State_Diag%FracOfTimeInTrop                    => NULL()
@@ -3126,7 +3132,26 @@ CONTAINS
        CALL GC_Error( errMsg, RC, thisLoc )
        RETURN
     ENDIF
-    
+
+    diagId  = 'SurfaceFluxAdj2'
+    CALL Init_and_Register(                                                  &
+         Input_Opt      = Input_Opt,                                         &
+         State_Chm      = State_Chm,                                         &
+         State_Diag     = State_Diag,                                        &
+         State_Grid     = State_Grid,                                        &
+         DiagList       = Diag_List,                                         &
+         TaggedDiagList = TaggedDiag_List,                                   &
+         Ptr2Data       = State_Diag%SurfaceFluxAdj2,                        &
+         archiveData    = State_Diag%Archive_SurfaceFluxAdj2,                &
+         mapData        = State_Diag%Map_SurfaceFluxAdj2,                    &
+         diagId         = diagId,                                            &
+         diagFlag       = 'S',                                               &
+         RC             = RC                                                )
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( diagId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
     !------------------------------------------------------------------------
     ! Species adjoint diagnostic
     !------------------------------------------------------------------------
@@ -12616,6 +12641,11 @@ CALL Finalize( diagId   = 'SurfaceFluxAdj',                              &
                    RC       = RC                                            )
     IF ( RC /= GC_SUCCESS ) RETURN
 
+    CALL Finalize( diagId   = 'SurfaceFluxAdj2',                             &
+                   Ptr2Data = State_Diag%SurfaceFluxAdj2,                    &
+                   mapData  = State_Diag%Map_SurfaceFluxAdj2,                &
+                   RC       = RC                                            )
+    IF ( RC /= GC_SUCCESS ) RETURN
     CALL Finalize( diagId   = 'ScaleICsAdj',                                 &
                    Ptr2Data = State_Diag%ScaleICsAdj,                        &
                    mapData  = State_Diag%Map_ScaleICsAdj,                    &
@@ -14624,7 +14654,13 @@ CALL Finalize( diagId   = 'SurfaceFluxAdj',                              &
        IF ( isRank    ) Rank  = 3
        IF ( isTagged  ) TagId = 'ALL'
        IF ( isSrcType ) SrcType  = KINDVAL_F8
-    ELSE IF ( TRIM(Name_AllCaps) == 'SURFACEFLUXADJ') THEN   
+    ELSE IF ( TRIM(Name_AllCaps) == 'SURFACEFLUXADJ2') THEN
+       IF ( isDesc    ) Desc  = 'Adjoint sensitivity to the second surface flux (ADJ_HEMCO_SFLUX2)'
+       IF ( isUnits   ) Units = 'kg-1 m2 s'
+       IF ( isRank    ) Rank  = 2
+       IF ( isTagged  ) TagId = 'ALL'
+       IF ( isSrcType ) SrcType  = KINDVAL_F8
+    ELSE IF ( TRIM(Name_AllCaps) == 'SURFACEFLUXADJ') THEN
        IF ( isDesc    ) Desc  = 'Adjoint sensitivity to surface flux'
        IF ( isUnits   ) Units = 'kg-1 m2 s' ! Kay ?? Or 'kg-1 m2 s' (inverse flux units)
        IF ( isRank    ) Rank  = 2      

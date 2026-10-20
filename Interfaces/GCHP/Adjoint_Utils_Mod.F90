@@ -478,6 +478,7 @@ CONTAINS
 !
   IF (Is_Adj) THEN
         State_Chm%SurfaceFluxAdj(:,:,:)=0.d0
+        IF ( ASSOCIATED( State_Chm%SurfaceFluxAdj2 ) ) State_Chm%SurfaceFluxAdj2(:,:,:)=0.d0
   END IF        
 
 END SUBROUTINE Setup_Adjoint_ForwardPert
@@ -582,6 +583,17 @@ SUBROUTINE  Integrate_Srf_Adjoint(Input_Opt,State_Chm,State_Grid,State_Met, &
                SfcAdj *                                                           &
                ( SurfaceFluxForward * dt / ( rho_dry * dz ) )
 
+    ! second adjoint surface flux (ADJ_HEMCO_SFLUX2), the same expression with State_Chm%SurfaceFlux2
+    IF ( Input_Opt%ADJ_HEMCO_SFLUX2_ENABLED .AND. ASSOCIATED( State_Chm%SurfaceFluxAdj2 ) .AND. &
+         ASSOCIATED( State_Chm%SurfaceFlux2 ) ) THEN
+       DO N = 1, State_Chm%nAdvect
+          IF ( State_Chm%Map_Advect(N) == NFD ) THEN
+             State_Chm%SurfaceFluxAdj2(:,:,NFD) = State_Chm%SurfaceFluxAdj2(:,:,NFD) +              &
+                  SfcAdj * ( State_Chm%SurfaceFlux2(:,:,N) * dt / ( rho_dry * dz ) )
+             EXIT
+          ENDIF
+       ENDDO
+    ENDIF
 !        IF ( Input_Opt%amIRoot ) THEN
 !                WRITE(*,*) 'Integrate_Srf_Adjoint: NFD=', NFD,                    &
 !                   ' dt=', dt,                                                     &
