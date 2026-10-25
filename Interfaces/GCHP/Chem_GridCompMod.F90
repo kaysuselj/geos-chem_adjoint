@@ -453,6 +453,21 @@ CONTAINS
        RC=STATUS  )
     _VERIFY(STATUS)
 
+#ifdef ADJOINT
+    ! AdvCore's tracer ADV_ADJ_TRAJ_TRACER before the forward advection of the step. Imported
+    ! only so that it is written to (forward run) and read from (adjoint run) the import
+    ! checkpoint; the adjoint run copies it into that tracer after the column adjoints.
+    call MAPL_AddImportSpec(GC, &
+       SHORT_NAME         = 'TRAJ_PREADV',  &
+       LONG_NAME          = 'tracer_before_advection_for_adjoint',  &
+       UNITS              = 'mol mol-1', &
+       PRECISION          = ESMF_KIND_R8, &
+       DIMS               = MAPL_DimsHorzVert,    &
+       VLOCATION          = MAPL_VLocationCenter,    &
+                                                      RC=STATUS  )
+    _VERIFY(STATUS)
+#endif
+
 #ifdef RRTMG
     If (Read_Dyn_Heating) Then
        call MAPL_AddImportSpec(GC, &
@@ -2353,6 +2368,7 @@ CONTAINS
    REAL(ESMF_KIND_R8)           :: AdjLocalSum
    REAL(ESMF_KIND_R8)           :: AdjGlobalSum
    INTEGER                      :: AdjCO2_ID
+   CHARACTER(len=ESMF_MAXSTR)   :: TrajTracer    ! ADV_ADJ_TRAJ_TRACER (TRAJ_PREADV copy)
     REAL(ESMF_KIND_r8), POINTER  :: CostFuncMask(:,:,:) => NULL()
     INTEGER(ESMF_KIND_I8)        :: adj_elapsed_s  ! Elapsed sim seconds for adjoint alarm check
 #endif
@@ -3457,6 +3473,25 @@ CONTAINS
           IF ( am_I_Root ) THEN
              WRITE(*,*) 'ADJ_CO2_SUM [after_afterrun] phase=', Phase,            &
                         ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+          ENDIF
+
+          ! Trajectory of the discrete_linear advection adjoint. The column adjoints leave
+          ! q(T+dt) in the internal state, but AdvCore reverses the advection of T -> T+dt next
+          ! and needs q(T), the field before that advection. The refreshed import checkpoint
+          ! holds it as TRAJ_PREADV (top-down, v/v dry, like the internal state). Only after
+          ! a refresh (IsRunTime); the next step refreshes the internal state again.
+          IF ( IsRunTime ) THEN
+             CALL MAPL_GetResource( STATE, TrajTracer, label='ADV_ADJ_TRAJ_TRACER:', &
+                                    default='SPC_CO2', __RC__ )
+             CALL MAPL_GetPointer( IMPORT, Ptr3d_R8, 'TRAJ_PREADV', notFoundOK=.TRUE., __RC__ )
+             IF ( ASSOCIATED(Ptr3d_R8) ) THEN
+                DO N = 1, SIZE(Int2Spc)
+                   IF ( TRIM(SPFX)//TRIM(Int2Spc(N)%Name) /= TRIM(TrajTracer) ) CYCLE
+                   IF ( .NOT. ASSOCIATED(Int2Spc(N)%Internal) ) CYCLE
+                   Int2Spc(N)%Internal = Ptr3d_R8
+                ENDDO
+             ENDIF
+             Ptr3d_R8 => NULL()
           ENDIF
        ENDIF
 #endif
