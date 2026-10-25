@@ -471,6 +471,17 @@ MODULE Input_Opt_Mod
     !   ADJ_HEMCO_SFLUX2_DIAGN: HEMCO diagnostic of that flux (DIAGN mode); '' = off
     LOGICAL                     :: ADJ_HEMCO_SFLUX2_ENABLED
     CHARACTER(LEN=255)          :: ADJ_HEMCO_SFLUX2_DIAGN
+    ! Adjoint checkpoint mode (GCHP.rc ADJ_CKPT_REDUCED:): 0 full, 1 reduced, 2 minimal
+    ! (CO2 after advection; with forward ADJ_CKPT_TRAJ: 1 also TRAJ_PREADV = CO2 before
+    ! advection, needed by discrete_linear; the adjoint
+    ! recomputes PLE, DryPLE and DELP_DRY from the met and skips the forward convection
+    ! and mixing of its replay). ADJ_CKPT_VERIFY: 1 (with mode 1) compares the recomputed
+    ! fields with the checkpoint at every step and keeps the checkpoint values.
+    INTEGER                     :: ADJ_CKPT_MODE
+    LOGICAL                     :: ADJ_CKPT_VERIFY
+    ! mode 2: DELP_DRY read from the checkpoint at this step (first step of the window,
+    ! where the forward DP_DRY_PREV came from the restart, not from the met)
+    LOGICAL                     :: ADJ_CKPT_DELP_READ
     ! Optional HEMCO hierarchy used by FILTERED mode.
 #endif
 
@@ -990,6 +1001,9 @@ CONTAINS
     Input_Opt%ADJ_HEMCO_SFLUX_HIER     = -1
     Input_Opt%ADJ_HEMCO_SFLUX2_ENABLED = .FALSE.
     Input_Opt%ADJ_HEMCO_SFLUX2_DIAGN   = ''
+    Input_Opt%ADJ_CKPT_MODE            = 0
+    Input_Opt%ADJ_CKPT_VERIFY          = .FALSE.
+    Input_Opt%ADJ_CKPT_DELP_READ       = .FALSE.
 #endif
 
     !----------------------------------------

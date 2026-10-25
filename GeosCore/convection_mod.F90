@@ -26,6 +26,12 @@ USE MAPL_CommsMod, only: MAPL_AM_I_ROOT
 ! !PUBLIC MEMBER FUNCTIONS:
 !
   PUBLIC  :: DO_CONVECTION
+  ! Diagnostic (GCHP.rc CONV_CLIP_DIAG: 1): how often the positivity clip of the RAS
+  ! convection (delq = -q when q + delq < 0, the only species-dependent branch of the
+  ! convection adjoint) is tested and how often it fires; reset by the caller.
+  LOGICAL,    PUBLIC :: Conv_Clip_Diag  = .FALSE.
+  INTEGER(8), PUBLIC :: Conv_Clip_Tests = 0
+  INTEGER(8), PUBLIC :: Conv_Clip_Fired = 0
 !
 ! !PRIVATE MEMBER FUNCTIONS:
 !
@@ -1052,7 +1058,15 @@ CONTAINS
                 DELQ    = ( SDT / BMASS(K) ) * TSUM    ! change in [kg/kg]
 
                 ! If DELQ > Q then do not make Q negative!!!
+                IF ( Conv_Clip_Diag ) THEN
+                   !$OMP ATOMIC
+                   Conv_Clip_Tests = Conv_Clip_Tests + 1
+                ENDIF
                 IF ( Q(K) + DELQ < 0 ) THEN
+                   IF ( Conv_Clip_Diag ) THEN
+                      !$OMP ATOMIC
+                      Conv_Clip_Fired = Conv_Clip_Fired + 1
+                   ENDIF
                    DELQ = -Q(K)
                 ENDIF
 
@@ -1150,7 +1164,15 @@ CONTAINS
                    DELQ = ( SDT / BMASS(K) ) * (T2 + T3)
 
                    ! If DELQ > Q then do not make Q negative!!!
+                   IF ( Conv_Clip_Diag ) THEN
+                      !$OMP ATOMIC
+                      Conv_Clip_Tests = Conv_Clip_Tests + 1
+                   ENDIF
                    IF ( Q(K) + DELQ < 0.0e+0_fp ) THEN
+                      IF ( Conv_Clip_Diag ) THEN
+                         !$OMP ATOMIC
+                         Conv_Clip_Fired = Conv_Clip_Fired + 1
+                      ENDIF
                       DELQ = -Q(K)
                    ENDIF
 

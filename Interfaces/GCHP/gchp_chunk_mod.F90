@@ -84,6 +84,7 @@ CONTAINS
     USE Photolysis_Mod,          ONLY : Init_Photolysis
     USE PhysConstants,           ONLY : PI_180
     USE Pressure_Mod,            ONLY : Init_Pressure
+    USE Convection_Mod,          ONLY : Conv_Clip_Diag
     USE Roundoff_Mod,            ONLY : RoundOff
     USE State_Chm_Mod,           ONLY : ChmState, Ind_
     USE State_Diag_Mod,          ONLY : DgnState
@@ -166,6 +167,7 @@ CONTAINS
     INTEGER                        :: imin, jmin, NFD, LFD
    INTEGER                        :: IFD, JFD
    INTEGER                        :: AdjSfluxCat, AdjSfluxHier
+   INTEGER                        :: AdjCkptVerify
    INTEGER                        :: AdjSfluxNA
     CHARACTER(LEN=ESMF_MAXSTR)     :: FD_TYPE
     INTEGER                        :: adj_from_file_int
@@ -202,6 +204,11 @@ CONTAINS
     call ESMF_ConfigGetAttribute(CF, MemDebugLevel, &
                                  Label="MEMORY_DEBUG_LEVEL:" , RC=STATUS)
     _VERIFY(STATUS)
+    ! positivity-clip diagnostic of the RAS convection (Convection_Mod), forward and adjoint
+    CALL ESMF_ConfigGetAttribute( CF, AdjCkptVerify,                       &
+       Label="CONV_CLIP_DIAG:", Default=0, RC=STATUS )
+    _VERIFY(STATUS)
+    Conv_Clip_Diag = ( AdjCkptVerify == 1 )
 #endif
 
     ! Update Input_Opt with timing fields
@@ -470,6 +477,19 @@ CONTAINS
          _VERIFY(STATUS)
          Input_Opt%ADJ_HEMCO_SFLUX2_DIAGN   = TRIM( ADJUSTL( AdjSfluxDiagn ) )
          Input_Opt%ADJ_HEMCO_SFLUX2_ENABLED = Input_Opt%ADJ_HEMCO_SFLUX2_DIAGN /= ''
+         ! Adjoint checkpoint mode (see Input_Opt%ADJ_CKPT_MODE)
+         CALL ESMF_ConfigGetAttribute( CF, Input_Opt%ADJ_CKPT_MODE,         &
+            Label="ADJ_CKPT_REDUCED:", Default=0, RC=STATUS )
+         _VERIFY(STATUS)
+         CALL ESMF_ConfigGetAttribute( CF, AdjCkptVerify,                   &
+            Label="ADJ_CKPT_VERIFY:", Default=0, RC=STATUS )
+         _VERIFY(STATUS)
+         Input_Opt%ADJ_CKPT_VERIFY = ( AdjCkptVerify == 1 )
+         IF ( Input_Opt%ADJ_CKPT_VERIFY .AND. Input_Opt%ADJ_CKPT_MODE /= 1 ) THEN
+            _ASSERT(.FALSE., 'ADJ_CKPT_VERIFY: 1 needs ADJ_CKPT_REDUCED: 1')
+         ENDIF
+         IF ( Input_Opt%amIRoot ) WRITE(*,*) 'Adjoint checkpoints: ADJ_CKPT_REDUCED=', &
+            Input_Opt%ADJ_CKPT_MODE, ' ADJ_CKPT_VERIFY=', Input_Opt%ADJ_CKPT_VERIFY
         ENDIF
 
        call ESMF_ConfigGetAttribute(CF, LFD, &
@@ -734,7 +754,7 @@ CONTAINS
 
     ! GEOS-Chem components
     USE Chemistry_Mod,      ONLY : Do_Chemistry, Recompute_OD
-    USE Convection_Mod,     ONLY : Do_Convection
+    USE Convection_Mod,     ONLY : Do_Convection, Conv_Clip_Diag, Conv_Clip_Tests, Conv_Clip_Fired
     USE DryDep_Mod,         ONLY : Do_DryDep
     USE Emissions_Mod,      ONLY : Emissions_Run
     USE Mixing_Mod,         ONLY : Do_Tend, Do_Mixing
@@ -758,6 +778,9 @@ CONTAINS
     USE MODIS_LAI_Mod,      ONLY : Compute_XLAI
     USE PBL_Mix_Mod,        ONLY : Compute_PBL_Height
     USE Pressure_Mod,       ONLY : Set_Floating_Pressures
+#ifdef ADJOINT
+    USE Pressure_Mod,       ONLY : Get_Delp_Dry
+#endif
     USE TOMS_Mod,           ONLY : Compute_Overhead_O3
     USE UCX_Mod,            ONLY : Set_H2O_Trac
     USE Vdiff_Mod,          ONLY : Max_PblHt_for_Vdiff
@@ -909,6 +932,11 @@ CONTAINS
     LOGICAL                        :: IS_ADJOINT
     ! Did the forward AirQnt call of this step update the mixing ratios?
     LOGICAL                        :: AirQntUpdatedMR
+    ! Minimal checkpoints (ADJ_CKPT_REDUCED: 2): recomputed DP_DRY_PREV
+    REAL(f8), ALLOCATABLE          :: DelpPrev(:,:,:)
+    REAL(f8)                       :: CkDiffLoc, CkDiffGlob
+    LOGICAL                        :: SkipFwdReplay
+    REAL(f8)                       :: ClipLoc(2), ClipGlob(2)
     ! whether we print adjoint debugs
     LOGICAL,parameter              :: debug_adjoint = .TRUE.
 #endif
@@ -1104,6 +1132,49 @@ CONTAINS
     CALL SET_FLOATING_PRESSURES( State_Grid, State_Met, RC )
     IF ( RC /= GC_SUCCESS ) RETURN
 
+#if defined( ADJOINT )
+    ! Minimal checkpoints (ADJ_CKPT_REDUCED: 2): DELP_DRY is not checkpointed. AirQnt
+    ! copies it to DP_DRY_PREV, which must be the forward value: DELP_DRY of the
+    ! previous forward step, i.e. GET_DELP_DRY of the dry surface pressure at the start
+    ! of this step (PS2 of the previous step = PS1 of this step, same instant). Computed
+    ! with GET_DELP_DRY itself (floating pressure set to PS1_DRY, then back to PS2_DRY)
+    ! so that the arithmetic is the forward one. With ADJ_CKPT_VERIFY: 1 the value
+    ! restored from the checkpoint is kept and only compared. At the first step of the
+    ! window the forward value came from the restart: there DELP_DRY is checkpointed
+    ! (ADJ_CKPT_DELP_READ) and restored like with reduced checkpoints.
+    IF ( Input_Opt%IS_ADJOINT .AND. .NOT. Input_Opt%ADJ_CKPT_DELP_READ .AND.  &
+         ( Input_Opt%ADJ_CKPT_MODE == 2 .OR. Input_Opt%ADJ_CKPT_VERIFY ) ) THEN
+       ALLOCATE( DelpPrev( State_Grid%NX, State_Grid%NY, State_Grid%NZ ) )
+       State_Met%PSC2_DRY = State_Met%PS1_DRY
+       CALL SET_FLOATING_PRESSURES( State_Grid, State_Met, RC )
+       IF ( RC /= GC_SUCCESS ) RETURN
+       DO L = 1, State_Grid%NZ
+       DO J = 1, State_Grid%NY
+       DO I = 1, State_Grid%NX
+          DelpPrev(I,J,L) = GET_DELP_DRY( I, J, L )
+       ENDDO
+       ENDDO
+       ENDDO
+       State_Met%PSC2_DRY = State_Met%PS2_DRY
+       CALL SET_FLOATING_PRESSURES( State_Grid, State_Met, RC )
+       IF ( RC /= GC_SUCCESS ) RETURN
+       IF ( Input_Opt%ADJ_CKPT_VERIFY ) THEN
+          CkDiffLoc = MAXVAL( ABS( DelpPrev - State_Met%DELP_DRY ) )
+          CALL ESMF_VMGetCurrent( VM, RC=STATUS )
+          _VERIFY(STATUS)
+          CALL MAPL_CommsAllReduceMax( VM, sendbuf=CkDiffLoc, recvbuf=CkDiffGlob, &
+                                       cnt=1, RC=STATUS )
+          _VERIFY(STATUS)
+          IF ( Input_Opt%amIRoot ) WRITE(*,'(A,I8.8,1X,I6.6,A,ES12.4)')          &
+             ' ADJ_CKPT_VERIFY ', nymd, nhms, ' DELP_DRY max|recomputed-ckpt| = ', &
+             CkDiffGlob
+       ELSE
+          State_Met%DELP_DRY = DelpPrev
+       ENDIF
+       DEALLOCATE( DelpPrev )
+    ENDIF
+#endif
+
     ! Define airmass and related quantities
 #if defined( ADJOINT )
     AirQntUpdatedMR = .FALSE.
@@ -1261,6 +1332,11 @@ CONTAINS
 #if defined (ADJOINT)
 	 IS_ADJOINT=Input_Opt%IS_ADJOINT 
 	 Input_Opt%IS_ADJOINT=.false.
+    ! Minimal checkpoints: the adjoints of mixing and the surface flux do not use the
+    ! species; the convection adjoint needs only the profile before convection (its
+    ! positivity clip), saved below as S_Pre_Conv. So the replay skips the forward
+    ! convection and mixing (all met and HEMCO calls are kept).
+    SkipFwdReplay = IS_ADJOINT .AND. Input_Opt%ADJ_CKPT_MODE == 2
 #endif	 
 	 	
     !=======================================================================
@@ -1306,9 +1382,27 @@ CONTAINS
        if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Do convection now'
        CALL MAPL_TimerOn( STATE, 'GC_CONV' )
 
+#if defined ( ADJOINT )
+       IF ( .NOT. SkipFwdReplay ) THEN
+#endif
        CALL DO_CONVECTION ( Input_Opt, State_Chm, State_Diag, &
                             State_Grid, State_Met, RC )
        _ASSERT(RC==GC_SUCCESS, 'Error calling DO_CONVECTION')
+#if defined ( ADJOINT )
+       ENDIF
+#endif
+       ! positivity-clip diagnostic (forward convection of this step)
+       IF ( Conv_Clip_Diag ) THEN
+          ClipLoc = (/ REAL(Conv_Clip_Tests,f8), REAL(Conv_Clip_Fired,f8) /)
+          CALL ESMF_VMGetCurrent( VM, RC=STATUS )
+          _VERIFY(STATUS)
+          CALL MAPL_CommsAllReduceSum( VM, sendbuf=ClipLoc, recvbuf=ClipGlob, cnt=2, RC=STATUS )
+          _VERIFY(STATUS)
+          IF ( Input_Opt%amIRoot ) WRITE(*,'(A,I8.8,1X,I6.6,A,ES12.4,A,ES12.4)')             &
+             ' CONV_CLIP ', nymd, nhms, ' tests=', ClipGlob(1), ' fired=', ClipGlob(2)
+          Conv_Clip_Tests = 0
+          Conv_Clip_Fired = 0
+       ENDIF
 
        CALL MAPL_TimerOff( STATE, 'GC_CONV' )
        if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Convection done!'
@@ -1472,11 +1566,15 @@ CONTAINS
 
        ! Do mixing and apply tendencies. This will use the dynamic time step,
        ! which is fine since this call will be executed on every time step.
+#if defined ( ADJOINT )
+       IF ( .NOT. SkipFwdReplay ) THEN
+#endif
        CALL DO_MIXING ( Input_Opt, State_Chm, State_Diag,                    &
                         State_Grid, State_Met, RC                           )
        _ASSERT(RC==GC_SUCCESS, 'Error calling DO_MIXING')
-
- 
+#if defined ( ADJOINT )
+       ENDIF
+#endif
 
        CALL MAPL_TimerOff( STATE, 'GC_TURB' )
        if(Input_Opt%AmIRoot.and.NCALLS<3) write(*,*) ' --- Turbulence done!'

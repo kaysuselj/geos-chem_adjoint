@@ -459,11 +459,34 @@ CONTAINS
     ! checkpoint; the adjoint run copies it into that tracer after the column adjoints.
     call MAPL_AddImportSpec(GC, &
        SHORT_NAME         = 'TRAJ_PREADV',  &
-       LONG_NAME          = 'tracer_before_advection_for_adjoint',  &
+       LONG_NAME          = 'CO2 before advection',  &
        UNITS              = 'mol mol-1', &
        PRECISION          = ESMF_KIND_R8, &
        DIMS               = MAPL_DimsHorzVert,    &
        VLOCATION          = MAPL_VLocationCenter,    &
+                                                      RC=STATUS  )
+    _VERIFY(STATUS)
+
+    ! GCHPctmEnv's PLE1 / DryPLE1: the PLE / DryPLE that AdvCore passes to this component in
+    ! the forward step. With minimal checkpoints (ADJ_CKPT_REDUCED: 2) the adjoint, which
+    ! runs GCHPctmEnv before this component, copies them into PLE / DryPLE instead of
+    ! reading the import checkpoint (AdvCore's own exports belong to the reversed step).
+    call MAPL_AddImportSpec(GC, &
+       SHORT_NAME         = 'PLE_ENV',  &
+       LONG_NAME          = 'pressure_level_edges_from_ctmenv',  &
+       UNITS              = 'Pa', &
+       PRECISION          = ESMF_KIND_R8, &
+       DIMS               = MAPL_DimsHorzVert,    &
+       VLOCATION          = MAPL_VLocationEdge,    &
+                                                      RC=STATUS  )
+    _VERIFY(STATUS)
+    call MAPL_AddImportSpec(GC, &
+       SHORT_NAME         = 'DryPLE_ENV',  &
+       LONG_NAME          = 'dry_pressure_level_edges_from_ctmenv',  &
+       UNITS              = 'Pa', &
+       PRECISION          = ESMF_KIND_R8, &
+       DIMS               = MAPL_DimsHorzVert,    &
+       VLOCATION          = MAPL_VLocationEdge,    &
                                                       RC=STATUS  )
     _VERIFY(STATUS)
 #endif
@@ -3480,7 +3503,7 @@ CONTAINS
           ! and needs q(T), the field before that advection. The refreshed import checkpoint
           ! holds it as TRAJ_PREADV (top-down, v/v dry, like the internal state). Only after
           ! a refresh (IsRunTime); the next step refreshes the internal state again.
-          IF ( IsRunTime ) THEN
+          IF ( IsRunTime .AND. Adjoint_TrajRead( STATE, Input_Opt ) ) THEN
              CALL MAPL_GetResource( STATE, TrajTracer, label='ADV_ADJ_TRAJ_TRACER:', &
                                     default='SPC_CO2', __RC__ )
              CALL MAPL_GetPointer( IMPORT, Ptr3d_R8, 'TRAJ_PREADV', notFoundOK=.TRUE., __RC__ )
@@ -4542,6 +4565,78 @@ CONTAINS
      _RETURN(ESMF_SUCCESS)
    end subroutine Adjoint_CkptSubset
 
+   subroutine Adjoint_CkptMinState( INTERNAL, IMPORT, withTraj, withDelp, CKPT, RC )
+     ! Minimal adjoint checkpoint (GCHP.rc ADJ_CKPT_REDUCED: 2): SPC_<species> of the advected
+     ! species (the profile before convection is rebuilt from it; the convection adjoint
+     ! needs it for its positivity clip) and, if withTraj, the import TRAJ_PREADV (trajectory
+     ! of the discrete_linear advection adjoint). Everything else is recomputed from the met
+     ! in the adjoint run. withDelp (first step of the window only): also DELP_DRY, whose
+     ! forward value at that step is the restart's (DP_DRY_PREV of AIRQNT), not the met's.
+     ! References to the internal / import fields: reading updates them.
+     type(ESMF_State),  intent(inout) :: INTERNAL
+     type(ESMF_State),  intent(inout) :: IMPORT
+     logical,           intent(in)    :: withTraj
+     logical,           intent(in)    :: withDelp
+     type(ESMF_State),  intent(out)   :: CKPT
+     integer, optional, intent(out)   :: RC
+     character(len=ESMF_MAXSTR)                  :: IAm = 'Adjoint_CkptMinState'
+     character(len=ESMF_MAXSTR), allocatable     :: names(:)
+     type(ESMF_StateItem_Flag),  allocatable     :: types(:)
+     type(ESMF_Field)                            :: field
+     integer                                     :: itemCount, i, ind, STATUS
+     integer                                     :: gridBits, rstReq
+     logical                                     :: isPresent
+     character(len=ESMF_MAXSTR)                  :: positive
+     call ESMF_StateGet( INTERNAL, itemCount=itemCount, __RC__ )
+     allocate( names(itemCount), types(itemCount) )
+     call ESMF_StateGet( INTERNAL, itemNameList=names, itemTypeList=types, __RC__ )
+     CKPT = ESMF_StateCreate( name='GCHPchem_adjoint_checkpoint', __RC__ )
+     call ESMF_AttributeGet( INTERNAL, NAME='MAPL_GridTypeBits', VALUE=gridBits, __RC__ )
+     call ESMF_AttributeSet( CKPT,     NAME='MAPL_GridTypeBits', VALUE=gridBits, __RC__ )
+     call ESMF_AttributeGet( INTERNAL, NAME='POSITIVE', VALUE=positive, __RC__ )
+     call ESMF_AttributeSet( CKPT,     NAME='POSITIVE', VALUE=positive, __RC__ )
+     call ESMF_AttributeGet( INTERNAL, NAME='MAPL_RestartRequired', isPresent=isPresent, __RC__ )
+     if ( isPresent ) then
+        call ESMF_AttributeGet( INTERNAL, NAME='MAPL_RestartRequired', VALUE=rstReq, __RC__ )
+        call ESMF_AttributeSet( CKPT,     NAME='MAPL_RestartRequired', VALUE=rstReq, __RC__ )
+     endif
+     do i = 1, itemCount
+        if ( types(i) /= ESMF_STATEITEM_FIELD ) cycle
+        if ( len_trim(names(i)) <= 4 ) cycle
+        if ( names(i)(1:4) /= 'SPC_' ) cycle
+        ind = IND_( trim(names(i)(5:)) )
+        if ( ind <= 0 ) cycle
+        if ( .not. State_Chm%SpcData(ind)%Info%Is_Advected ) cycle
+        call ESMF_StateGet( INTERNAL, trim(names(i)), field, __RC__ )
+        call ESMF_StateAdd( CKPT, [field], __RC__ )
+     enddo
+     if ( withTraj ) then
+        call ESMF_StateGet( IMPORT, 'TRAJ_PREADV', field, __RC__ )
+        call ESMF_StateAdd( CKPT, [field], __RC__ )
+     endif
+     if ( withDelp ) then
+        call ESMF_StateGet( INTERNAL, 'DELP_DRY', field, __RC__ )
+        call ESMF_StateAdd( CKPT, [field], __RC__ )
+     endif
+     deallocate( names, types )
+     _RETURN(ESMF_SUCCESS)
+   end subroutine Adjoint_CkptMinState
+
+   logical function Adjoint_TrajRead( STATE, Input_Opt )
+     ! Does the adjoint read TRAJ_PREADV from the checkpoint (and copy it into the traced
+     ! species after the column adjoints)? Always with full / reduced checkpoints (as
+     ! before); with minimal checkpoints only for the discrete_linear advection adjoint.
+     type(MAPL_MetaComp), pointer :: STATE
+     type(OptInput),      intent(in) :: Input_Opt
+     character(len=ESMF_MAXSTR)      :: method
+     integer                         :: STATUS
+     Adjoint_TrajRead = .true.
+     if ( Input_Opt%ADJ_CKPT_MODE /= 2 ) return
+     call MAPL_GetResource( STATE, method, label='ADV_ADJ_METHOD:', &
+                            default='reverse_wind', RC=STATUS )
+     Adjoint_TrajRead = ( trim(method) == 'discrete_linear' )
+   end function Adjoint_TrajRead
+
    subroutine Adjoint_StateRecord( GC, IMPORT, EXPORT, CLOCK, RC )
 
      ! !ARGUMENTS:
@@ -4565,6 +4660,8 @@ CONTAINS
      type (ESMF_State)                           :: INTERNAL
      type (ESMF_State)                           :: CKPT     ! ADJ_CKPT_REDUCED subset
      integer                                     :: reduced
+     integer                                     :: wtraj
+     logical, save                               :: firstRecord = .true.
      integer                                     :: hdr
      character(len=ESMF_MAXSTR)                  :: FILETYPE
      character(len=ESMF_MAXSTR)                  :: FNAME, DATESTAMP
@@ -4598,6 +4695,23 @@ CONTAINS
      call MAPL_DateStampGet(clock, datestamp, __RC__ )
 
      FILETYPE = 'pnc4'
+
+     call MAPL_GetResource( STATE, reduced, label='ADJ_CKPT_REDUCED:', default=0, __RC__ )
+     if ( reduced == 2 ) then
+        ! one file: advected species = CO2 after advection (default, enough for the
+        ! reverse_wind advection adjoint) + with ADJ_CKPT_TRAJ: 1 TRAJ_PREADV = CO2 before
+        ! advection (needed by the discrete_linear advection adjoint)
+        call MAPL_GetResource( STATE, wtraj, label='ADJ_CKPT_TRAJ:', default=0, __RC__ )
+        ! first record of the run = first step of the window: DELP_DRY too
+        call Adjoint_CkptMinState( INTERNAL, IMPORT, wtraj == 1, firstRecord, CKPT, __RC__ )
+        firstRecord = .false.
+        FNAME = 'gcadj_checkpoint.' // trim(datestamp) // '.nc4'
+        call MAPL_CheckpointState(CKPT, CLOCK, FNAME, FILETYPE, STATE, hdr/=0, RC=STATUS)
+        _VERIFY(STATUS)
+        call ESMF_StateDestroy( CKPT, __RC__ )
+        _RETURN(ESMF_SUCCESS)
+     endif
+
      FNAME = 'gcadj_import_checkpoint.' // trim(datestamp) // '.nc4'
 
 
@@ -4609,7 +4723,6 @@ CONTAINS
 
      FNAME = 'gcadj_internal_checkpoint.' // trim(datestamp) // '.nc4'
 
-     call MAPL_GetResource( STATE, reduced, label='ADJ_CKPT_REDUCED:', default=0, __RC__ )
      if ( reduced == 1 ) then
         call Adjoint_CkptSubset( INTERNAL, CKPT, __RC__ )
         call MAPL_CheckpointState(CKPT, CLOCK, FNAME, FILETYPE, STATE, hdr/=0, RC=STATUS)
@@ -4628,6 +4741,7 @@ CONTAINS
    end subroutine Adjoint_StateRecord
 
    subroutine Adjoint_StateRefresh( GC, IMPORT, EXPORT, CLOCK, RC )
+     use pFIO, only : NetCDF4_FileFormatter, FileMetadata, pFIO_READ
 
      ! !ARGUMENTS:
 
@@ -4653,6 +4767,14 @@ CONTAINS
      integer                                     :: hdr
      integer                                     :: unit
    logical                                     :: fileExists
+     type(ESMF_Time)                             :: ckTime
+     type(ESMF_TimeInterval)                     :: ckDt
+     integer                                     :: ckY, ckM, ckD, ckH, ckMi
+     character(len=ESMF_MAXSTR)                  :: prevName
+     logical, save                               :: trajCheckPending = .true.
+     logical                                     :: hasTraj
+     type(NetCDF4_FileFormatter)                 :: trajFmt
+     type(FileMetadata)                          :: trajMeta
 
      character(len=ESMF_MAXSTR)                  :: FNAME, datestamp
 
@@ -4680,6 +4802,62 @@ CONTAINS
 
      HDR = 0
 
+     call MAPL_GetResource( STATE, reduced, label='ADJ_CKPT_REDUCED:', default=0, __RC__ )
+     if ( reduced == 2 ) then
+        FNAME = 'gcadj_checkpoint.' // trim(datestamp) // '.nc4'
+        INQUIRE(FILE=TRIM(FNAME), EXIST=fileExists)
+        IF ( .NOT. fileExists ) THEN
+           WRITE(*,*) TRIM(Iam)//': Missing adjoint checkpoint file: ', TRIM(FNAME)
+           STATUS = GC_FAILURE
+           _VERIFY(STATUS)
+        ENDIF
+        ! first step of the window (no checkpoint for the forward step before it): DELP_DRY too.
+        ! The file of t - dt is still there (each file is deleted after its own read).
+        call ESMF_ClockGet( CLOCK, currTime=ckTime, __RC__ )
+        call ESMF_TimeIntervalSet( ckDt, s=Input_Opt%TS_DYN, __RC__ )
+        ckTime = ckTime - ckDt
+        call ESMF_TimeGet( ckTime, yy=ckY, mm=ckM, dd=ckD, h=ckH, m=ckMi, __RC__ )
+        write(prevName,'(A,I4.4,2I2.2,A,2I2.2,A)') 'gcadj_checkpoint.', ckY, ckM, ckD, '_', ckH, ckMi, 'z.nc4'
+        INQUIRE(FILE=TRIM(prevName), EXIST=fileExists)
+        Input_Opt%ADJ_CKPT_DELP_READ = .not. fileExists
+        ! discrete_linear needs TRAJ_PREADV: check the first checkpoint read and stop with
+        ! an explicit message (a MAPL read error would be cryptic, a component FAIL is not fatal)
+        if ( trajCheckPending .and. Adjoint_TrajRead( STATE, Input_Opt ) ) then
+           call trajFmt%open( trim(FNAME), pFIO_READ, rc=STATUS )
+           _VERIFY(STATUS)
+           trajMeta = trajFmt%read( rc=STATUS )
+           _VERIFY(STATUS)
+           hasTraj = trajMeta%has_variable( 'TRAJ_PREADV' )
+           call trajFmt%close( rc=STATUS )
+           if ( .not. hasTraj ) then
+              if ( MAPL_Am_I_Root() ) then
+                 write(*,*) 'ERROR: TRAJ_PREADV (CO2 before advection) missing in the adjoint checkpoint ', trim(FNAME)
+                 write(*,*) '  ADV_ADJ_METHOD: discrete_linear needs it. Rerun the forward run with'
+                 write(*,*) '  ADJ_CKPT_REDUCED: 2 and ADJ_CKPT_TRAJ: 1 in its GCHP.rc (4D-Var: control set'
+                 write(*,*) '  control_files_148_ckpt_min_DL), or run the adjoint with ADV_ADJ_METHOD: reverse_wind_pure.'
+              endif
+              call ESMF_Finalize( endflag=ESMF_END_ABORT )
+           endif
+        endif
+        trajCheckPending = .false.
+        if ( Input_Opt%ADJ_CKPT_DELP_READ .and. MAPL_Am_I_Root() ) &
+           write(*,*) 'Minimal adjoint checkpoint: first step of the window, DELP_DRY read from ', trim(FNAME)
+        call Adjoint_CkptMinState( INTERNAL, IMPORT, Adjoint_TrajRead( STATE, Input_Opt ), &
+                                   Input_Opt%ADJ_CKPT_DELP_READ, CKPT, __RC__ )
+        call MAPL_ESMFStateReadFromFile(CKPT, CLOCK, FNAME, STATE, hdr/=0, RC=STATUS)
+        _VERIFY(STATUS)
+        call ESMF_StateDestroy( CKPT, __RC__ )
+        UNIT = GETFILE(FNAME, RC=STATUS)
+        _VERIFY(STATUS)
+        call MAPL_DestroyFile(unit = UNIT, rc=STATUS)
+        _VERIFY(STATUS)
+        CALL FREE_FILE(UNIT, RC=STATUS)
+        _VERIFY(STATUS)
+        ! PLE / DryPLE of the forward step from GCHPctmEnv (run before this component)
+        call Adjoint_PleFromEnv( IMPORT, .false., __RC__ )
+        _RETURN(ESMF_SUCCESS)
+     endif
+
      FNAME = 'gcadj_import_checkpoint.' // trim(datestamp) // '.nc4'
 
      INQUIRE(FILE=TRIM(FNAME), EXIST=fileExists)
@@ -4700,6 +4878,8 @@ CONTAINS
      _VERIFY(STATUS)
      CALL FREE_FILE(UNIT, RC=STATUS)
      _VERIFY(STATUS)
+     ! ADJ_CKPT_VERIFY: 1: compare GCHPctmEnv's PLE / DryPLE with the checkpointed ones
+     if ( Input_Opt%ADJ_CKPT_VERIFY ) call Adjoint_PleFromEnv( IMPORT, .true., __RC__ )
 
      FNAME = 'gcadj_internal_checkpoint.' // trim(datestamp) // '.nc4'
 
@@ -4710,7 +4890,6 @@ CONTAINS
         _VERIFY(STATUS)
      ENDIF
 
-     call MAPL_GetResource( STATE, reduced, label='ADJ_CKPT_REDUCED:', default=0, __RC__ )
      if ( reduced == 1 ) then
         call Adjoint_CkptSubset( INTERNAL, CKPT, __RC__ )
         call MAPL_ESMFStateReadFromFile(CKPT, CLOCK, FNAME, STATE, hdr/=0, RC=STATUS)
@@ -4736,6 +4915,38 @@ CONTAINS
 
      _RETURN(ESMF_SUCCESS)
    end subroutine Adjoint_StateRefresh
+
+   subroutine Adjoint_PleFromEnv( IMPORT, verifyOnly, RC )
+     ! PLE / DryPLE of the forward step = GCHPctmEnv's PLE1 / DryPLE1 (AdvCore exports
+     ! PLE = PLE1, DryPLE = DryPLE1 in the forward run). verifyOnly: compare them with the
+     ! values just read from the import checkpoint and print the global max |difference|.
+     type(ESMF_State),  intent(inout) :: IMPORT
+     logical,           intent(in)    :: verifyOnly
+     integer, optional, intent(out)   :: RC
+     character(len=ESMF_MAXSTR)       :: IAm = 'Adjoint_PleFromEnv'
+     real(ESMF_KIND_R8), pointer      :: ple(:,:,:), pleEnv(:,:,:)
+     real(ESMF_KIND_R8)               :: dLoc(2), dGlob(2)
+     character(len=6), parameter      :: nm(2) = (/ 'PLE   ', 'DryPLE' /)
+     type(ESMF_VM)                    :: VM
+     integer                          :: k, STATUS
+     dLoc = 0.0_ESMF_KIND_R8
+     do k = 1, 2
+        call MAPL_GetPointer( IMPORT, ple,    trim(nm(k)),          __RC__ )
+        call MAPL_GetPointer( IMPORT, pleEnv, trim(nm(k))//'_ENV',  __RC__ )
+        if ( verifyOnly ) then
+           dLoc(k) = maxval( abs( pleEnv - ple ) )
+        else
+           ple = pleEnv
+        endif
+     enddo
+     if ( verifyOnly ) then
+        call ESMF_VMGetCurrent( VM, __RC__ )
+        call MAPL_CommsAllReduceMax( VM, sendbuf=dLoc, recvbuf=dGlob, cnt=2, __RC__ )
+        if ( MAPL_Am_I_Root() ) write(*,'(A,2ES12.4)') &
+           ' ADJ_CKPT_VERIFY PLE, DryPLE max|ctmEnv-ckpt| = ', dGlob
+     endif
+     _RETURN(ESMF_SUCCESS)
+   end subroutine Adjoint_PleFromEnv
 
 #endif
 
