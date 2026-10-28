@@ -167,7 +167,8 @@ CONTAINS
     INTEGER                        :: imin, jmin, NFD, LFD
    INTEGER                        :: IFD, JFD
    INTEGER                        :: AdjSfluxCat, AdjSfluxHier
-   INTEGER                        :: AdjCkptVerify
+   INTEGER                        :: AdjCkptVerify, AdjCkpt
+   LOGICAL                        :: OldCkptKey
    INTEGER                        :: AdjSfluxNA
     CHARACTER(LEN=ESMF_MAXSTR)     :: FD_TYPE
     INTEGER                        :: adj_from_file_int
@@ -361,6 +362,11 @@ CONTAINS
        ELSE
           NFD = Ind_(FD_SPEC)
        ENDIF
+       ! the backward run needs the species whose adjoint it integrates (seed, forcing and
+       ! surface-flux gradient), e.g. FD_SPEC: CO2
+       IF ( input_opt%IS_ADJOINT ) THEN
+          _ASSERT( NFD > 0, 'backward run: set FD_SPEC to the adjoint species (e.g. FD_SPEC: CO2) in GCHP.rc' )
+       ENDIF
 
       call WRITE_PARALLEL('FD_SPEC'//FD_SPEC)
 
@@ -477,19 +483,34 @@ CONTAINS
          _VERIFY(STATUS)
          Input_Opt%ADJ_HEMCO_SFLUX2_DIAGN   = TRIM( ADJUSTL( AdjSfluxDiagn ) )
          Input_Opt%ADJ_HEMCO_SFLUX2_ENABLED = Input_Opt%ADJ_HEMCO_SFLUX2_DIAGN /= ''
-         ! Adjoint checkpoint mode (see Input_Opt%ADJ_CKPT_MODE)
-         CALL ESMF_ConfigGetAttribute( CF, Input_Opt%ADJ_CKPT_MODE,         &
-            Label="ADJ_CKPT_REDUCED:", Default=0, RC=STATUS )
+         ! Adjoint checkpoints, GCHP.rc ADJ_CKPT: (same value in the forward and the adjoint run):
+         ! 1 minimal, CO2 after advection (default; RW advection adjoint); 2 minimal + CO2 before
+         ! advection (required by ADV_ADJ_METHOD: discrete_linear); 3 reduced and 4 full state
+         ! (testing). Internal Input_Opt%ADJ_CKPT_MODE: 2 minimal, 1 reduced, 0 full.
+         CALL ESMF_ConfigGetAttribute( CF, AdjCkpt, Label="ADJ_CKPT:", Default=1, RC=STATUS )
          _VERIFY(STATUS)
+         CALL ESMF_ConfigFindLabel( CF, 'ADJ_CKPT_REDUCED:', isPresent=OldCkptKey, RC=STATUS )
+         _VERIFY(STATUS)
+         _ASSERT(.NOT. OldCkptKey, 'ADJ_CKPT_REDUCED is replaced by ADJ_CKPT: 1 (RW), 2 (DL), 3 or 4 (testing)')
+         SELECT CASE ( AdjCkpt )
+         CASE ( 1, 2 )
+            Input_Opt%ADJ_CKPT_MODE = 2
+         CASE ( 3 )
+            Input_Opt%ADJ_CKPT_MODE = 1
+         CASE ( 4 )
+            Input_Opt%ADJ_CKPT_MODE = 0
+         CASE DEFAULT
+            _ASSERT(.FALSE., 'ADJ_CKPT must be 1, 2, 3 or 4')
+         END SELECT
          CALL ESMF_ConfigGetAttribute( CF, AdjCkptVerify,                   &
             Label="ADJ_CKPT_VERIFY:", Default=0, RC=STATUS )
          _VERIFY(STATUS)
          Input_Opt%ADJ_CKPT_VERIFY = ( AdjCkptVerify == 1 )
          IF ( Input_Opt%ADJ_CKPT_VERIFY .AND. Input_Opt%ADJ_CKPT_MODE /= 1 ) THEN
-            _ASSERT(.FALSE., 'ADJ_CKPT_VERIFY: 1 needs ADJ_CKPT_REDUCED: 1')
+            _ASSERT(.FALSE., 'ADJ_CKPT_VERIFY: 1 needs ADJ_CKPT: 3')
          ENDIF
-         IF ( Input_Opt%amIRoot ) WRITE(*,*) 'Adjoint checkpoints: ADJ_CKPT_REDUCED=', &
-            Input_Opt%ADJ_CKPT_MODE, ' ADJ_CKPT_VERIFY=', Input_Opt%ADJ_CKPT_VERIFY
+         IF ( Input_Opt%amIRoot ) WRITE(*,*) 'Adjoint checkpoints: ADJ_CKPT=', AdjCkpt, &
+            ' ADJ_CKPT_VERIFY=', Input_Opt%ADJ_CKPT_VERIFY
         ENDIF
 
        call ESMF_ConfigGetAttribute(CF, LFD, &
@@ -932,7 +953,7 @@ CONTAINS
     LOGICAL                        :: IS_ADJOINT
     ! Did the forward AirQnt call of this step update the mixing ratios?
     LOGICAL                        :: AirQntUpdatedMR
-    ! Minimal checkpoints (ADJ_CKPT_REDUCED: 2): recomputed DP_DRY_PREV
+    ! Minimal checkpoints (ADJ_CKPT: 1 or 2): recomputed DP_DRY_PREV
     REAL(f8), ALLOCATABLE          :: DelpPrev(:,:,:)
     REAL(f8)                       :: CkDiffLoc, CkDiffGlob
     LOGICAL                        :: SkipFwdReplay
@@ -1133,7 +1154,7 @@ CONTAINS
     IF ( RC /= GC_SUCCESS ) RETURN
 
 #if defined( ADJOINT )
-    ! Minimal checkpoints (ADJ_CKPT_REDUCED: 2): DELP_DRY is not checkpointed. AirQnt
+    ! Minimal checkpoints (ADJ_CKPT: 1 or 2): DELP_DRY is not checkpointed. AirQnt
     ! copies it to DP_DRY_PREV, which must be the forward value: DELP_DRY of the
     ! previous forward step, i.e. GET_DELP_DRY of the dry surface pressure at the start
     ! of this step (PS2 of the previous step = PS1 of this step, same instant). Computed

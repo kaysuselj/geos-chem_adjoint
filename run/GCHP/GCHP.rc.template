@@ -165,6 +165,11 @@ EXCLUDE_ADVECTION_TRACERS: NO
 #
 # MODEL_PHASE indicates forward model (FORWARD) or adjoint model (ADJOINT)
 MODEL_PHASE: FORWARD
+
+# Adjoint checkpoints, same value in the forward and the adjoint run: 1 (default) the CO2 after
+# advection, for ADV_ADJ_METHOD: reverse_wind_pure; 2 also the CO2 before advection, required by
+# ADV_ADJ_METHOD: discrete_linear; 3 and 4 (reduced and full state) for testing only
+ADJ_CKPT: 1
 # FD_TYPE:             GLOBAL
 # FD_STEP:             0
 # FD_SPEC:             CO2

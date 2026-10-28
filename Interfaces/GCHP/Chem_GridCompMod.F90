@@ -468,7 +468,7 @@ CONTAINS
     _VERIFY(STATUS)
 
     ! GCHPctmEnv's PLE1 / DryPLE1: the PLE / DryPLE that AdvCore passes to this component in
-    ! the forward step. With minimal checkpoints (ADJ_CKPT_REDUCED: 2) the adjoint, which
+    ! the forward step. With minimal checkpoints (ADJ_CKPT: 1 or 2) the adjoint, which
     ! runs GCHPctmEnv before this component, copies them into PLE / DryPLE instead of
     ! reading the import checkpoint (AdvCore's own exports belong to the reversed step).
     call MAPL_AddImportSpec(GC, &
@@ -4516,8 +4516,39 @@ CONTAINS
 
    end subroutine Adjoint_RefreshExports
 
+   subroutine Adjoint_CkptSetting( STATE, mode, wtraj, RC )
+     ! GCHP.rc ADJ_CKPT (same value in the forward and the adjoint run) -> internal checkpoint
+     ! mode (2 minimal, 1 reduced, 0 full) and wtraj = 1 if the forward run writes TRAJ_PREADV
+     ! (CO2 before advection): ADJ_CKPT 1 minimal, CO2 after advection (default; RW advection
+     ! adjoint); 2 minimal + CO2 before advection (discrete_linear); 3 reduced, 4 full (testing).
+     ! The keys of v1.0-rc3 (ADJ_CKPT_REDUCED, ADJ_CKPT_TRAJ) stop the run.
+     type(MAPL_MetaComp), pointer       :: STATE
+     integer,           intent(out)     :: mode, wtraj
+     integer, optional, intent(out)     :: RC
+     character(len=ESMF_MAXSTR)         :: IAm = 'Adjoint_CkptSetting'
+     integer                            :: adjCkpt, oldKey, STATUS
+     call MAPL_GetResource( STATE, oldKey, label='ADJ_CKPT_REDUCED:', default=-99, __RC__ )
+     _ASSERT( oldKey == -99, 'ADJ_CKPT_REDUCED is replaced by ADJ_CKPT: 1 (RW), 2 (DL), 3 or 4 (testing)' )
+     call MAPL_GetResource( STATE, oldKey, label='ADJ_CKPT_TRAJ:', default=-99, __RC__ )
+     _ASSERT( oldKey == -99, 'ADJ_CKPT_TRAJ is replaced by ADJ_CKPT: 2 (CO2 before advection, for DL)' )
+     call MAPL_GetResource( STATE, adjCkpt, label='ADJ_CKPT:', default=1, __RC__ )
+     select case ( adjCkpt )
+     case ( 1 )
+        mode = 2; wtraj = 0
+     case ( 2 )
+        mode = 2; wtraj = 1
+     case ( 3 )
+        mode = 1; wtraj = 0
+     case ( 4 )
+        mode = 0; wtraj = 0
+     case default
+        _ASSERT( .false., 'ADJ_CKPT must be 1, 2, 3 or 4' )
+     end select
+     _RETURN(ESMF_SUCCESS)
+   end subroutine Adjoint_CkptSetting
+
    subroutine Adjoint_CkptSubset( INTERNAL, CKPT, RC )
-     ! Subset of the internal state for the adjoint checkpoints (GCHP.rc ADJ_CKPT_REDUCED: 1):
+     ! Subset of the internal state for the adjoint checkpoints (GCHP.rc ADJ_CKPT: 3):
      ! all 2-D fields, DELP_DRY, BXHEIGHT and SPC_<species> of ADVECTED species only. The
      ! non-advected species and the full-chemistry 3-D fields (KPPHvalue, AeroH2O_SNA,
      ! H2O2AfterChem, SO2AfterChem, ORVCSESQ, STATE_PSC) are not used by a CO2 adjoint step.
@@ -4566,7 +4597,7 @@ CONTAINS
    end subroutine Adjoint_CkptSubset
 
    subroutine Adjoint_CkptMinState( INTERNAL, IMPORT, withTraj, withDelp, CKPT, RC )
-     ! Minimal adjoint checkpoint (GCHP.rc ADJ_CKPT_REDUCED: 2): SPC_<species> of the advected
+     ! Minimal adjoint checkpoint (GCHP.rc ADJ_CKPT: 1 or 2): SPC_<species> of the advected
      ! species (the profile before convection is rebuilt from it; the convection adjoint
      ! needs it for its positivity clip) and, if withTraj, the import TRAJ_PREADV (trajectory
      ! of the discrete_linear advection adjoint). Everything else is recomputed from the met
@@ -4658,7 +4689,7 @@ CONTAINS
 
      type (MAPL_MetaComp), pointer               :: STATE
      type (ESMF_State)                           :: INTERNAL
-     type (ESMF_State)                           :: CKPT     ! ADJ_CKPT_REDUCED subset
+     type (ESMF_State)                           :: CKPT     ! ADJ_CKPT subset
      integer                                     :: reduced
      integer                                     :: wtraj
      logical, save                               :: firstRecord = .true.
@@ -4696,12 +4727,11 @@ CONTAINS
 
      FILETYPE = 'pnc4'
 
-     call MAPL_GetResource( STATE, reduced, label='ADJ_CKPT_REDUCED:', default=0, __RC__ )
+     call Adjoint_CkptSetting( STATE, reduced, wtraj, __RC__ )
      if ( reduced == 2 ) then
-        ! one file: advected species = CO2 after advection (default, enough for the
-        ! reverse_wind advection adjoint) + with ADJ_CKPT_TRAJ: 1 TRAJ_PREADV = CO2 before
+        ! one file: advected species = CO2 after advection (ADJ_CKPT: 1, enough for the
+        ! reverse_wind advection adjoint) + with ADJ_CKPT: 2 TRAJ_PREADV = CO2 before
         ! advection (needed by the discrete_linear advection adjoint)
-        call MAPL_GetResource( STATE, wtraj, label='ADJ_CKPT_TRAJ:', default=0, __RC__ )
         ! first record of the run = first step of the window: DELP_DRY too
         call Adjoint_CkptMinState( INTERNAL, IMPORT, wtraj == 1, firstRecord, CKPT, __RC__ )
         firstRecord = .false.
@@ -4762,8 +4792,8 @@ CONTAINS
 
      type (MAPL_MetaComp), pointer               :: STATE
      type (ESMF_State)                           :: INTERNAL
-     type (ESMF_State)                           :: CKPT     ! ADJ_CKPT_REDUCED subset
-     integer                                     :: reduced
+     type (ESMF_State)                           :: CKPT     ! ADJ_CKPT subset
+     integer                                     :: reduced, wtraj
      integer                                     :: hdr
      integer                                     :: unit
    logical                                     :: fileExists
@@ -4802,7 +4832,7 @@ CONTAINS
 
      HDR = 0
 
-     call MAPL_GetResource( STATE, reduced, label='ADJ_CKPT_REDUCED:', default=0, __RC__ )
+     call Adjoint_CkptSetting( STATE, reduced, wtraj, __RC__ )
      if ( reduced == 2 ) then
         FNAME = 'gcadj_checkpoint.' // trim(datestamp) // '.nc4'
         INQUIRE(FILE=TRIM(FNAME), EXIST=fileExists)
@@ -4832,9 +4862,9 @@ CONTAINS
            if ( .not. hasTraj ) then
               if ( MAPL_Am_I_Root() ) then
                  write(*,*) 'ERROR: TRAJ_PREADV (CO2 before advection) missing in the adjoint checkpoint ', trim(FNAME)
-                 write(*,*) '  ADV_ADJ_METHOD: discrete_linear needs it. Rerun the forward run with'
-                 write(*,*) '  ADJ_CKPT_REDUCED: 2 and ADJ_CKPT_TRAJ: 1 in its GCHP.rc (4D-Var: control set'
-                 write(*,*) '  control_files_148_ckpt_min_DL), or run the adjoint with ADV_ADJ_METHOD: reverse_wind_pure.'
+                 write(*,*) '  ADV_ADJ_METHOD: discrete_linear needs it. Rerun the forward run with ADJ_CKPT: 2'
+                 write(*,*) '  in its GCHP.rc (and use ADJ_CKPT: 2 here), or run the adjoint with'
+                 write(*,*) '  ADV_ADJ_METHOD: reverse_wind_pure.'
               endif
               call ESMF_Finalize( endflag=ESMF_END_ABORT )
            endif
