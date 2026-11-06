@@ -167,8 +167,11 @@ CONTAINS
     INTEGER                        :: imin, jmin, NFD, LFD
    INTEGER                        :: IFD, JFD
    INTEGER                        :: AdjSfluxCat, AdjSfluxHier
-   INTEGER                        :: AdjCkptVerify, AdjCkpt
+   INTEGER                        :: AdjCkptVerify, AdjMethod, K
    LOGICAL                        :: OldCkptKey
+   CHARACTER(LEN=ESMF_MAXSTR)     :: AdjCkptDebug
+   CHARACTER(LEN=20), PARAMETER   :: OldAdjKeys(4) = [ CHARACTER(LEN=20) :: 'ADJ_CKPT:',     &
+                                     'ADV_ADJ_METHOD:', 'ADJ_CKPT_REDUCED:', 'ADJ_CKPT_TRAJ:' ]
    INTEGER                        :: AdjSfluxNA
     CHARACTER(LEN=ESMF_MAXSTR)     :: FD_TYPE
     INTEGER                        :: adj_from_file_int
@@ -309,6 +312,58 @@ CONTAINS
        call WRITE_PARALLEL('Yes! Setting IS_ADJOINT to true.')
        input_opt%IS_ADJOINT = .TRUE.
     endif
+
+    ! Adjoint method, GCHP.rc ADJ_METHOD: (required in the forward and the adjoint run, same
+    ! value in both; see Input_Opt%ADJ_METHOD): 1 reverse_wind + convection adjoint with the
+    ! positivity clip; 2 discrete_linear + clip; 3 reverse_wind + convection adjoint without
+    ! the clip; 4 discrete_linear + without the clip. The forward run uses it only to decide
+    ! what goes into the checkpoint. ADJ_CKPT_DEBUG: reduced | full (testing, methods 1, 2).
+    ! The keys of v1.0-rc4 (ADJ_CKPT, ADV_ADJ_METHOD) and rc3 stop the run.
+    DO K = 1, 4
+       CALL ESMF_ConfigFindLabel( CF, TRIM(OldAdjKeys(K)), isPresent=OldCkptKey, RC=STATUS )
+       _VERIFY(STATUS)
+       IF ( OldCkptKey .AND. Input_Opt%amIRoot ) WRITE(*,*) 'ERROR: GCHP.rc key ', &
+          TRIM(OldAdjKeys(K)), ' is replaced by ADJ_METHOD: 1 (reverse_wind), 2 (discrete_linear),', &
+          ' 3 (reverse_wind, simplified convection) or 4 (discrete_linear, simplified convection)'
+       _ASSERT(.NOT. OldCkptKey, 'ADJ_CKPT / ADV_ADJ_METHOD are replaced by ADJ_METHOD: 1, 2, 3 or 4')
+    ENDDO
+    CALL ESMF_ConfigFindLabel( CF, 'ADJ_METHOD:', isPresent=OldCkptKey, RC=STATUS )
+    _VERIFY(STATUS)
+    IF ( .NOT. OldCkptKey .AND. Input_Opt%amIRoot ) WRITE(*,*) 'ERROR: GCHP.rc needs ADJ_METHOD:', &
+       ' 1 (reverse_wind), 2 (discrete_linear), 3 (reverse_wind, simplified convection) or', &
+       ' 4 (discrete_linear, simplified convection), the same in the forward and the adjoint run'
+    _ASSERT(OldCkptKey, 'ADJ_METHOD missing in GCHP.rc (1, 2, 3 or 4, no default)')
+    CALL ESMF_ConfigGetAttribute( CF, AdjMethod, Label="ADJ_METHOD:", RC=STATUS )
+    _VERIFY(STATUS)
+    _ASSERT(AdjMethod >= 1 .AND. AdjMethod <= 4, 'ADJ_METHOD must be 1, 2, 3 or 4')
+    Input_Opt%ADJ_METHOD      = AdjMethod
+    Input_Opt%ADJ_DISCRETE    = ( AdjMethod == 2 .OR. AdjMethod == 4 )
+    Input_Opt%ADJ_SIMPLE_CONV = ( AdjMethod >= 3 )
+    CALL ESMF_ConfigGetAttribute( CF, AdjCkptDebug, Label="ADJ_CKPT_DEBUG:", Default='none', &
+                                  RC=STATUS )
+    _VERIFY(STATUS)
+    SELECT CASE ( TRIM( To_UpperCase( ADJUSTL( AdjCkptDebug ) ) ) )
+    CASE ( 'NONE' )
+       Input_Opt%ADJ_CKPT_MODE = 2
+    CASE ( 'REDUCED' )
+       Input_Opt%ADJ_CKPT_MODE = 1
+    CASE ( 'FULL' )
+       Input_Opt%ADJ_CKPT_MODE = 0
+    CASE DEFAULT
+       _ASSERT(.FALSE., 'ADJ_CKPT_DEBUG must be none, reduced or full')
+    END SELECT
+    _ASSERT(Input_Opt%ADJ_CKPT_MODE == 2 .OR. AdjMethod <= 2, 'ADJ_CKPT_DEBUG needs ADJ_METHOD 1 or 2')
+    CALL ESMF_ConfigGetAttribute( CF, AdjCkptVerify,                    &
+       Label="ADJ_CKPT_VERIFY:", Default=0, RC=STATUS )
+    _VERIFY(STATUS)
+    Input_Opt%ADJ_CKPT_VERIFY = ( AdjCkptVerify == 1 )
+    IF ( Input_Opt%ADJ_CKPT_VERIFY .AND. Input_Opt%ADJ_CKPT_MODE /= 1 ) THEN
+       _ASSERT(.FALSE., 'ADJ_CKPT_VERIFY: 1 needs ADJ_CKPT_DEBUG: reduced')
+    ENDIF
+    IF ( Input_Opt%amIRoot ) WRITE(*,*) 'Adjoint method: ADJ_METHOD=', AdjMethod,           &
+       ' discrete_linear=', Input_Opt%ADJ_DISCRETE, ' simplified convection=',              &
+       Input_Opt%ADJ_SIMPLE_CONV, ' ADJ_CKPT_DEBUG=', TRIM(AdjCkptDebug),                   &
+       ' ADJ_CKPT_VERIFY=', Input_Opt%ADJ_CKPT_VERIFY
 
     call ESMF_ConfigGetAttribute(CF, FD_TYPE, &
          Label="FD_TYPE:" , Default='NONE', RC=STATUS)
@@ -483,35 +538,10 @@ CONTAINS
          _VERIFY(STATUS)
          Input_Opt%ADJ_HEMCO_SFLUX2_DIAGN   = TRIM( ADJUSTL( AdjSfluxDiagn ) )
          Input_Opt%ADJ_HEMCO_SFLUX2_ENABLED = Input_Opt%ADJ_HEMCO_SFLUX2_DIAGN /= ''
-         ! Adjoint checkpoints, GCHP.rc ADJ_CKPT: (same value in the forward and the adjoint run):
-         ! 1 minimal, CO2 after advection (default; RW advection adjoint); 2 minimal + CO2 before
-         ! advection (required by ADV_ADJ_METHOD: discrete_linear); 3 reduced and 4 full state
-         ! (testing). Internal Input_Opt%ADJ_CKPT_MODE: 2 minimal, 1 reduced, 0 full.
-         CALL ESMF_ConfigGetAttribute( CF, AdjCkpt, Label="ADJ_CKPT:", Default=1, RC=STATUS )
-         _VERIFY(STATUS)
-         CALL ESMF_ConfigFindLabel( CF, 'ADJ_CKPT_REDUCED:', isPresent=OldCkptKey, RC=STATUS )
-         _VERIFY(STATUS)
-         _ASSERT(.NOT. OldCkptKey, 'ADJ_CKPT_REDUCED is replaced by ADJ_CKPT: 1 (RW), 2 (DL), 3 or 4 (testing)')
-         SELECT CASE ( AdjCkpt )
-         CASE ( 1, 2 )
-            Input_Opt%ADJ_CKPT_MODE = 2
-         CASE ( 3 )
-            Input_Opt%ADJ_CKPT_MODE = 1
-         CASE ( 4 )
-            Input_Opt%ADJ_CKPT_MODE = 0
-         CASE DEFAULT
-            _ASSERT(.FALSE., 'ADJ_CKPT must be 1, 2, 3 or 4')
-         END SELECT
-         CALL ESMF_ConfigGetAttribute( CF, AdjCkptVerify,                   &
-            Label="ADJ_CKPT_VERIFY:", Default=0, RC=STATUS )
-         _VERIFY(STATUS)
-         Input_Opt%ADJ_CKPT_VERIFY = ( AdjCkptVerify == 1 )
-         IF ( Input_Opt%ADJ_CKPT_VERIFY .AND. Input_Opt%ADJ_CKPT_MODE /= 1 ) THEN
-            _ASSERT(.FALSE., 'ADJ_CKPT_VERIFY: 1 needs ADJ_CKPT: 3')
-         ENDIF
-         IF ( Input_Opt%amIRoot ) WRITE(*,*) 'Adjoint checkpoints: ADJ_CKPT=', AdjCkpt, &
-            ' ADJ_CKPT_VERIFY=', Input_Opt%ADJ_CKPT_VERIFY
+         ! Adjoint method and checkpoints (ADJ_METHOD, ADJ_CKPT_DEBUG, ADJ_CKPT_VERIFY): read
+         ! after MODEL_PHASE, for the forward and the adjoint run alike.
         ENDIF
+
 
        call ESMF_ConfigGetAttribute(CF, LFD, &
             Label="LFD:",default=0, RC=STATUS)
@@ -953,7 +983,7 @@ CONTAINS
     LOGICAL                        :: IS_ADJOINT
     ! Did the forward AirQnt call of this step update the mixing ratios?
     LOGICAL                        :: AirQntUpdatedMR
-    ! Minimal checkpoints (ADJ_CKPT: 1 or 2): recomputed DP_DRY_PREV
+    ! Minimal checkpoints (ADJ_METHOD 1-4): recomputed DP_DRY_PREV
     REAL(f8), ALLOCATABLE          :: DelpPrev(:,:,:)
     REAL(f8)                       :: CkDiffLoc, CkDiffGlob
     LOGICAL                        :: SkipFwdReplay
@@ -1154,7 +1184,7 @@ CONTAINS
     IF ( RC /= GC_SUCCESS ) RETURN
 
 #if defined( ADJOINT )
-    ! Minimal checkpoints (ADJ_CKPT: 1 or 2): DELP_DRY is not checkpointed. AirQnt
+    ! Minimal checkpoints (ADJ_METHOD 1-4): DELP_DRY is not checkpointed. AirQnt
     ! copies it to DP_DRY_PREV, which must be the forward value: DELP_DRY of the
     ! previous forward step, i.e. GET_DELP_DRY of the dry surface pressure at the start
     ! of this step (PS2 of the previous step = PS1 of this step, same instant). Computed

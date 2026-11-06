@@ -1688,7 +1688,9 @@ ELSE
 ! change in [kg/kg]
           delq = sdt/bmass(k)*tsum
 ! If DELQ > Q then do not make Q negative!!!
-          IF (q(k) + delq .LT. 0) THEN
+! (ADJ_METHOD 3, 4: the adjoint ignores this positivity clip and takes the no-clip branch, so
+!  it needs no CO2 trajectory; the forward model above keeps the clip)
+          IF (.NOT. Input_Opt%ADJ_SIMPLE_CONV .AND. q(k) + delq .LT. 0) THEN
             delq = -q(k)
             CALL PUSHCONTROL1B(0)
           ELSE
@@ -1721,8 +1723,8 @@ ELSE
             t3 = cmfmc(k)*q(k+1)
 ! Change in species concentration [kg/kg]
             delq = sdt/bmass(k)*(t2+t3)
-! If DELQ > Q then do not make Q negative!!!
-            IF (q(k) + delq .LT. 0.0e+0_fp) THEN
+! If DELQ > Q then do not make Q negative!!!  (not with ADJ_METHOD 3, 4, see above)
+            IF (.NOT. Input_Opt%ADJ_SIMPLE_CONV .AND. q(k) + delq .LT. 0.0e+0_fp) THEN
               delq = -q(k)
               CALL PUSHCONTROL1B(0)
             ELSE

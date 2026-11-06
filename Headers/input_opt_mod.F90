@@ -471,12 +471,24 @@ MODULE Input_Opt_Mod
     !   ADJ_HEMCO_SFLUX2_DIAGN: HEMCO diagnostic of that flux (DIAGN mode); '' = off
     LOGICAL                     :: ADJ_HEMCO_SFLUX2_ENABLED
     CHARACTER(LEN=255)          :: ADJ_HEMCO_SFLUX2_DIAGN
-    ! Adjoint checkpoint mode, from GCHP.rc ADJ_CKPT: (1 minimal, CO2 after advection, default;
-    ! 2 minimal + TRAJ_PREADV = CO2 before advection, needed by discrete_linear; 3 reduced;
-    ! 4 full): internal 2 minimal (ADJ_CKPT 1 or 2), 1 reduced (3), 0 full (4). With minimal
-    ! checkpoints the adjoint recomputes PLE, DryPLE and DELP_DRY from the met and skips the
-    ! forward convection and mixing of its replay. ADJ_CKPT_VERIFY: 1 (with ADJ_CKPT: 3)
-    ! compares the recomputed fields with the checkpoint at every step and keeps the checkpoint values.
+    ! Adjoint method, from GCHP.rc ADJ_METHOD: (same value in the forward and the adjoint run;
+    ! required, no default):
+    !   1 reverse_wind advection adjoint, normal convection adjoint (with the positivity clip)
+    !   2 discrete_linear advection adjoint, normal convection adjoint
+    !   3 reverse_wind, simplified convection adjoint (clip not tested: no CO2 needed)
+    !   4 discrete_linear, simplified convection adjoint
+    ! The forward model is the same for all four (its convection keeps the clip). Checkpoint per
+    ! step: 1 CO2 after advection; 2 that + TRAJ_PREADV (CO2 before advection); 3 none;
+    ! 4 TRAJ_PREADV only. ADJ_CKPT_DEBUG: reduced | full (methods 1, 2; testing) replaces the
+    ! minimal checkpoint by the reduced or the full state.
+    INTEGER                     :: ADJ_METHOD
+    LOGICAL                     :: ADJ_DISCRETE      ! ADJ_METHOD 2, 4: discrete_linear advection adjoint
+    LOGICAL                     :: ADJ_SIMPLE_CONV   ! ADJ_METHOD 3, 4: convection adjoint without the clip
+    ! Internal checkpoint mode: 2 minimal (ADJ_METHOD 1-4), 1 reduced, 0 full (ADJ_CKPT_DEBUG).
+    ! With minimal checkpoints the adjoint recomputes PLE, DryPLE and DELP_DRY from the met and
+    ! skips the forward convection and mixing of its replay. ADJ_CKPT_VERIFY: 1 (with
+    ! ADJ_CKPT_DEBUG: reduced) compares the recomputed fields with the checkpoint at every step
+    ! and keeps the checkpoint values.
     INTEGER                     :: ADJ_CKPT_MODE
     LOGICAL                     :: ADJ_CKPT_VERIFY
     ! mode 2: DELP_DRY read from the checkpoint at this step (first step of the window,
@@ -1001,6 +1013,9 @@ CONTAINS
     Input_Opt%ADJ_HEMCO_SFLUX_HIER     = -1
     Input_Opt%ADJ_HEMCO_SFLUX2_ENABLED = .FALSE.
     Input_Opt%ADJ_HEMCO_SFLUX2_DIAGN   = ''
+    Input_Opt%ADJ_METHOD               = 0
+    Input_Opt%ADJ_DISCRETE             = .FALSE.
+    Input_Opt%ADJ_SIMPLE_CONV          = .FALSE.
     Input_Opt%ADJ_CKPT_MODE            = 2
     Input_Opt%ADJ_CKPT_VERIFY          = .FALSE.
     Input_Opt%ADJ_CKPT_DELP_READ       = .FALSE.
