@@ -166,10 +166,15 @@ EXCLUDE_ADVECTION_TRACERS: NO
 # MODEL_PHASE indicates forward model (FORWARD) or adjoint model (ADJOINT)
 MODEL_PHASE: FORWARD
 
-# Adjoint checkpoints, same value in the forward and the adjoint run: 1 (default) the CO2 after
-# advection, for ADV_ADJ_METHOD: reverse_wind_pure; 2 also the CO2 before advection, required by
-# ADV_ADJ_METHOD: discrete_linear; 3 and 4 (reduced and full state) for testing only
-ADJ_CKPT: 1
+# Adjoint method (required, same value in the forward and the adjoint run; the forward run uses it
+# only to decide what it checkpoints):
+#   1 reverse_wind advection adjoint,    convection adjoint with the positivity clip (checkpoint: CO2 after advection)
+#   2 discrete_linear advection adjoint, convection adjoint with the clip      (CO2 after + before advection)
+#   3 reverse_wind,    simplified convection adjoint, clip not tested          (no checkpoint)
+#   4 discrete_linear, simplified convection adjoint                           (CO2 before advection only)
+# The forward model is the same for all four. For testing, the key ADJ_CKPT_DEBUG (reduced or full; methods
+# 1, 2 only) replaces the minimal checkpoint. (No 'KEY:' text in comments: ESMF may find labels there.)
+ADJ_METHOD: 1
 # FD_TYPE:             GLOBAL
 # FD_STEP:             0
 # FD_SPEC:             CO2
