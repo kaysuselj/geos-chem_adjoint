@@ -2481,7 +2481,7 @@ CONTAINS
        CALL ESMF_TimeIntervalGet( tsChemInt, s_i8=adj_elapsed_s, __RC__ )
        ! Check if current time is a multiple of TS_DYN (forcing file frequency)
        IsAdjTime = ( MOD( adj_elapsed_s, INT( Input_Opt%TS_DYN, ESMF_KIND_I8 ) ) == 0_ESMF_KIND_I8 )
-       IF ( am_I_Root .AND. IsAdjTime ) THEN
+       IF ( am_I_Root .AND. IsAdjTime .AND. Input_Opt%ADJ_DEBUG ) THEN
           WRITE(*,'(A,L1,A,I0)') ' IsAdjTime=', IsAdjTime, ' (adj_elapsed_s=', adj_elapsed_s, ')'
        ENDIF
     ENDIF
@@ -2633,7 +2633,7 @@ CONTAINS
        call MAPL_GetPointer( IMPORT, CostFuncMask, &
             'CFN_MASK', notFoundOK=.TRUE.,         &
             __RC__ )
-       if (MAPL_Am_I_Root() .and. .not. ASSOCIATED(CostFuncMask)) &
+       if (MAPL_Am_I_Root() .and. Input_Opt%ADJ_DEBUG .and. .not. ASSOCIATED(CostFuncMask)) &
             WRITE(*,*) ' No CFN_MASK import variable found'
 #endif
 
@@ -2659,14 +2659,16 @@ CONTAINS
                 ENDIF
              ENDDO
           ENDIF
-          call ESMF_VMGetCurrent(VM, RC=STATUS)
-          _VERIFY(STATUS)
-          call MAPL_CommsAllReduceSum(VM, sendbuf=AdjLocalSum, recvbuf=AdjGlobalSum, &
-                                      cnt=1, RC=STATUS)
-          _VERIFY(STATUS)
-          IF ( am_I_Root ) THEN
-             WRITE(*,*) 'ADJ_CO2_SUM [at_entry_int2adj] phase=', Phase,        &
-                        ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+          IF ( Input_Opt%ADJ_DEBUG ) THEN   ! adjoint debug sums (GCHP.rc ADJ_DEBUG: 1)
+             call ESMF_VMGetCurrent(VM, RC=STATUS)
+             _VERIFY(STATUS)
+             call MAPL_CommsAllReduceSum(VM, sendbuf=AdjLocalSum, recvbuf=AdjGlobalSum, &
+                                         cnt=1, RC=STATUS)
+             _VERIFY(STATUS)
+             IF ( am_I_Root ) THEN
+                WRITE(*,*) 'ADJ_CO2_SUM [at_entry_int2adj] phase=', Phase,        &
+                           ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+             ENDIF
           ENDIF
        ENDIF
 #endif
@@ -2786,10 +2788,9 @@ CONTAINS
                 ! call MAPL_GenericRefresh(GC, Import, Export, Clock, RC)
                 
 
-                if ( Input_Opt%amIRoot) THEN    
-                        print *,'Kay, before refresh, species:',State_Chm%SpcData(3)%Info%Name
-                        print *,'Kay before refresh',Int2Spc(3)%Internal(6,5,State_Grid%NZ)
-                        ! print *,'Kay before refresh,1',State_Chm%Species(Int2Spc(3)%ID)%Conc(6,5,1)
+                if ( Input_Opt%amIRoot .and. Input_Opt%ADJ_DEBUG ) THEN
+                        print *,'ADJ_DEBUG before refresh, species:',State_Chm%SpcData(3)%Info%Name
+                        print *,'ADJ_DEBUG before refresh',Int2Spc(3)%Internal(6,5,State_Grid%NZ)
                 endif
                 
 
@@ -2807,16 +2808,16 @@ CONTAINS
                    State_Chm%Species(Int2Spc(N)%ID)%Conc => &
                       Int2Spc(N)%Internal(:,:,State_Grid%NZ:1:-1)
                    
-                   if ( MAPL_am_I_Root()) WRITE(*,*)                                &
+                   if ( MAPL_am_I_Root() .and. Input_Opt%ADJ_DEBUG ) WRITE(*,*)     &
                         'Initialized species from INTERNAL state: ', TRIM(ThisSpc%Name)
 
                 ENDDO
 
 
-                if ( Input_Opt%amIRoot) THEN
-                        print *,'Kay after refresh',Int2Spc(3)%Internal(6,5,State_Grid%NZ)
-                        print *,'Kay Species_ID',Int2Spc(3)%ID
-                        print *,'Kay after refresh,1',State_Chm%Species(Int2Spc(3)%ID)%Conc(6,5,1)
+                if ( Input_Opt%amIRoot .and. Input_Opt%ADJ_DEBUG ) THEN
+                        print *,'ADJ_DEBUG after refresh',Int2Spc(3)%Internal(6,5,State_Grid%NZ)
+                        print *,'ADJ_DEBUG Species_ID',Int2Spc(3)%ID
+                        print *,'ADJ_DEBUG after refresh,1',State_Chm%Species(Int2Spc(3)%ID)%Conc(6,5,1)
                 endif
 
                 ! Keep SpeciesAdj synchronized with refreshed internal adjoint
@@ -2832,14 +2833,16 @@ CONTAINS
                 IF ( AdjCO2_ID > 0 .AND. ASSOCIATED(State_Chm%SpeciesAdj) ) THEN
                    AdjLocalSum = SUM( REAL( State_Chm%SpeciesAdj(:,:,:,AdjCO2_ID), ESMF_KIND_R8 ) )
                 ENDIF
-                call ESMF_VMGetCurrent(VM, RC=STATUS)
-                _VERIFY(STATUS)
-                call MAPL_CommsAllReduceSum(VM, sendbuf=AdjLocalSum, recvbuf=AdjGlobalSum, &
-                                            cnt=1, RC=STATUS)
-                _VERIFY(STATUS)
-                IF ( am_I_Root ) THEN
-                   WRITE(*,*) 'ADJ_CO2_SUM [after_refresh] phase=', Phase,         &
-                              ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+                IF ( Input_Opt%ADJ_DEBUG ) THEN   ! adjoint debug sums (GCHP.rc ADJ_DEBUG: 1)
+                   call ESMF_VMGetCurrent(VM, RC=STATUS)
+                   _VERIFY(STATUS)
+                   call MAPL_CommsAllReduceSum(VM, sendbuf=AdjLocalSum, recvbuf=AdjGlobalSum, &
+                                               cnt=1, RC=STATUS)
+                   _VERIFY(STATUS)
+                   IF ( am_I_Root ) THEN
+                      WRITE(*,*) 'ADJ_CO2_SUM [after_refresh] phase=', Phase,         &
+                                 ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+                   ENDIF
                 ENDIF
 
 
@@ -2884,14 +2887,16 @@ CONTAINS
          IF ( AdjCO2_ID > 0 .AND. ASSOCIATED(State_Chm%SpeciesAdj) ) THEN
             AdjLocalSum = SUM( REAL( State_Chm%SpeciesAdj(:,:,:,AdjCO2_ID), ESMF_KIND_R8 ) )
          ENDIF
-         call ESMF_VMGetCurrent(VM, RC=STATUS)
-         _VERIFY(STATUS)
-         call MAPL_CommsAllReduceSum(VM, sendbuf=AdjLocalSum, recvbuf=AdjGlobalSum, &
-                                     cnt=1, RC=STATUS)
-         _VERIFY(STATUS)
-         IF ( am_I_Root ) THEN
-            WRITE(*,*) 'ADJ_CO2_SUM [after_int2adj_copy] phase=', Phase,        &
-                       ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+         IF ( Input_Opt%ADJ_DEBUG ) THEN   ! adjoint debug sums (GCHP.rc ADJ_DEBUG: 1)
+            call ESMF_VMGetCurrent(VM, RC=STATUS)
+            _VERIFY(STATUS)
+            call MAPL_CommsAllReduceSum(VM, sendbuf=AdjLocalSum, recvbuf=AdjGlobalSum, &
+                                        cnt=1, RC=STATUS)
+            _VERIFY(STATUS)
+            IF ( am_I_Root ) THEN
+               WRITE(*,*) 'ADJ_CO2_SUM [after_int2adj_copy] phase=', Phase,        &
+                          ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+            ENDIF
          ENDIF
 
          ! Flip in the vertical
@@ -2902,14 +2907,16 @@ CONTAINS
          IF ( AdjCO2_ID > 0 .AND. ASSOCIATED(State_Chm%SpeciesAdj) ) THEN
             AdjLocalSum = SUM( REAL( State_Chm%SpeciesAdj(:,:,:,AdjCO2_ID), ESMF_KIND_R8 ) )
          ENDIF
-         call ESMF_VMGetCurrent(VM, RC=STATUS)
-         _VERIFY(STATUS)
-         call MAPL_CommsAllReduceSum(VM, sendbuf=AdjLocalSum, recvbuf=AdjGlobalSum, &
-                                     cnt=1, RC=STATUS)
-         _VERIFY(STATUS)
-         IF ( am_I_Root ) THEN
-            WRITE(*,*) 'ADJ_CO2_SUM [after_int2adj_flip] phase=', Phase,        &
-                       ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+         IF ( Input_Opt%ADJ_DEBUG ) THEN   ! adjoint debug sums (GCHP.rc ADJ_DEBUG: 1)
+            call ESMF_VMGetCurrent(VM, RC=STATUS)
+            _VERIFY(STATUS)
+            call MAPL_CommsAllReduceSum(VM, sendbuf=AdjLocalSum, recvbuf=AdjGlobalSum, &
+                                        cnt=1, RC=STATUS)
+            _VERIFY(STATUS)
+            IF ( am_I_Root ) THEN
+               WRITE(*,*) 'ADJ_CO2_SUM [after_int2adj_flip] phase=', Phase,        &
+                          ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+            ENDIF
          ENDIF
       ENDIF
 #endif
@@ -3304,8 +3311,8 @@ CONTAINS
 
         
 #ifdef ADJOINT
-            if ( Input_Opt%amIRoot) THEN
-                        print *,'Kay before chunk run',State_Chm%Species(3)%Conc(6,5,1)
+            if ( Input_Opt%amIRoot .and. Input_Opt%ADJ_DEBUG ) THEN
+                        print *,'ADJ_DEBUG before chunk run',State_Chm%Species(3)%Conc(6,5,1)
                 endif
 #endif
 
@@ -3316,14 +3323,16 @@ CONTAINS
                IF ( AdjCO2_ID > 0 .AND. ASSOCIATED(State_Chm%SpeciesAdj) ) THEN
                   AdjLocalSum = SUM( REAL( State_Chm%SpeciesAdj(:,:,:,AdjCO2_ID), ESMF_KIND_R8 ) )
                ENDIF
-               call ESMF_VMGetCurrent(VM, RC=STATUS)
-               _VERIFY(STATUS)
-               call MAPL_CommsAllReduceSum(VM, sendbuf=AdjLocalSum, recvbuf=AdjGlobalSum, &
-                                           cnt=1, RC=STATUS)
-               _VERIFY(STATUS)
-               IF ( am_I_Root ) THEN
-                  WRITE(*,*) 'ADJ_CO2_SUM [before_chunk] phase=', Phase,          &
-                             ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+               IF ( Input_Opt%ADJ_DEBUG ) THEN   ! adjoint debug sums (GCHP.rc ADJ_DEBUG: 1)
+                  call ESMF_VMGetCurrent(VM, RC=STATUS)
+                  _VERIFY(STATUS)
+                  call MAPL_CommsAllReduceSum(VM, sendbuf=AdjLocalSum, recvbuf=AdjGlobalSum, &
+                                              cnt=1, RC=STATUS)
+                  _VERIFY(STATUS)
+                  IF ( am_I_Root ) THEN
+                     WRITE(*,*) 'ADJ_CO2_SUM [before_chunk] phase=', Phase,          &
+                                ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+                  ENDIF
                ENDIF
             ENDIF
 #endif
@@ -3368,14 +3377,16 @@ CONTAINS
                 IF ( AdjCO2_ID > 0 .AND. ASSOCIATED(State_Chm%SpeciesAdj) ) THEN
                    AdjLocalSum = SUM( REAL( State_Chm%SpeciesAdj(:,:,:,AdjCO2_ID), ESMF_KIND_R8 ) )
                 ENDIF
-                call ESMF_VMGetCurrent(VM, RC=STATUS)
-                _VERIFY(STATUS)
-                call MAPL_CommsAllReduceSum(VM, sendbuf=AdjLocalSum, recvbuf=AdjGlobalSum, &
-                                            cnt=1, RC=STATUS)
-                _VERIFY(STATUS)
-                IF ( am_I_Root ) THEN
-                   WRITE(*,*) 'ADJ_CO2_SUM [after_chunk] phase=', Phase,           &
-                              ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+                IF ( Input_Opt%ADJ_DEBUG ) THEN   ! adjoint debug sums (GCHP.rc ADJ_DEBUG: 1)
+                   call ESMF_VMGetCurrent(VM, RC=STATUS)
+                   _VERIFY(STATUS)
+                   call MAPL_CommsAllReduceSum(VM, sendbuf=AdjLocalSum, recvbuf=AdjGlobalSum, &
+                                               cnt=1, RC=STATUS)
+                   _VERIFY(STATUS)
+                   IF ( am_I_Root ) THEN
+                      WRITE(*,*) 'ADJ_CO2_SUM [after_chunk] phase=', Phase,           &
+                                 ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+                   ENDIF
                 ENDIF
              ENDIF
 #endif
@@ -3488,14 +3499,16 @@ CONTAINS
           IF ( AdjCO2_ID > 0 .AND. ASSOCIATED(State_Chm%SpeciesAdj) ) THEN
              AdjLocalSum = SUM( REAL( State_Chm%SpeciesAdj(:,:,:,AdjCO2_ID), ESMF_KIND_R8 ) )
           ENDIF
-          call ESMF_VMGetCurrent(VM, RC=STATUS)
-          _VERIFY(STATUS)
-          call MAPL_CommsAllReduceSum(VM, sendbuf=AdjLocalSum, recvbuf=AdjGlobalSum, &
-                                      cnt=1, RC=STATUS)
-          _VERIFY(STATUS)
-          IF ( am_I_Root ) THEN
-             WRITE(*,*) 'ADJ_CO2_SUM [after_afterrun] phase=', Phase,            &
-                        ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+          IF ( Input_Opt%ADJ_DEBUG ) THEN   ! adjoint debug sums (GCHP.rc ADJ_DEBUG: 1)
+             call ESMF_VMGetCurrent(VM, RC=STATUS)
+             _VERIFY(STATUS)
+             call MAPL_CommsAllReduceSum(VM, sendbuf=AdjLocalSum, recvbuf=AdjGlobalSum, &
+                                         cnt=1, RC=STATUS)
+             _VERIFY(STATUS)
+             IF ( am_I_Root ) THEN
+                WRITE(*,*) 'ADJ_CO2_SUM [after_afterrun] phase=', Phase,            &
+                           ' nymd=', nymd, ' nhms=', nhms, ' sum=', AdjGlobalSum
+             ENDIF
           ENDIF
 
           ! Trajectory of the discrete_linear advection adjoint. The column adjoints leave

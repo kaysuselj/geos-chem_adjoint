@@ -360,6 +360,9 @@ CONTAINS
     IF ( Input_Opt%ADJ_CKPT_VERIFY .AND. Input_Opt%ADJ_CKPT_MODE /= 1 ) THEN
        _ASSERT(.FALSE., 'ADJ_CKPT_VERIFY: 1 needs ADJ_CKPT_DEBUG: reduced')
     ENDIF
+    CALL ESMF_ConfigGetAttribute( CF, AdjCkptVerify, Label="ADJ_DEBUG:", Default=0, RC=STATUS )
+    _VERIFY(STATUS)
+    Input_Opt%ADJ_DEBUG = ( AdjCkptVerify == 1 )
     IF ( Input_Opt%amIRoot ) WRITE(*,*) 'Adjoint method: ADJ_METHOD=', AdjMethod,           &
        ' discrete_linear=', Input_Opt%ADJ_DISCRETE, ' simplified convection=',              &
        Input_Opt%ADJ_SIMPLE_CONV, ' ADJ_CKPT_DEBUG=', TRIM(AdjCkptDebug),                   &
@@ -988,8 +991,6 @@ CONTAINS
     REAL(f8)                       :: CkDiffLoc, CkDiffGlob
     LOGICAL                        :: SkipFwdReplay
     REAL(f8)                       :: ClipLoc(2), ClipGlob(2)
-    ! whether we print adjoint debugs
-    LOGICAL,parameter              :: debug_adjoint = .TRUE.
 #endif
 
     ! For stratospheric adjustment
@@ -1332,7 +1333,9 @@ CONTAINS
 
 
 #if defined (ADJOINT)
-    if ( Input_Opt%IS_ADJOINT ) then
+    ! ADJ_DEBUG only: Print_Global_Species_Kg converts CO2 to kg and back (round trip, may change the last
+    ! bits of CO2) and prints the root's local sum only
+    if ( Input_Opt%IS_ADJOINT .and. Input_Opt%ADJ_DEBUG ) then
      if (.not. first) &
         CALL Print_Global_Species_Kg( I_DBG, J_DBG, L_DBG,           &
                           'CO2', Input_Opt, State_Chm,   &
@@ -1355,8 +1358,8 @@ CONTAINS
 
    
 
-    if (Input_Opt%amIRoot .and. Input_Opt%IS_ADJOINT) then
-       print *,'Kay, Adjoint variables at the start of gchp_chunk_mod.F90'
+    if (Input_Opt%amIRoot .and. Input_Opt%IS_ADJOINT .and. (first .or. Input_Opt%ADJ_DEBUG)) then
+       print *,'Adjoint variables at the start of gchp_chunk_mod.F90'
        print *, 'first', first
        print *, 'Input_Opt:IFD,JFD,LFD,NFD',Input_Opt%IFD,Input_Opt%JFD,Input_Opt%LFD,Input_Opt%NFD
        print *, 'StateGrid:NX,NY,NZ',State_Grid%NX,State_Grid%NY,State_Grid%NZ
@@ -1945,7 +1948,7 @@ CONTAINS
 
 
 #if defined ( ADJOINT )
-   IF (Is_Adjoint) THEN
+   IF (Is_Adjoint .AND. Input_Opt%ADJ_DEBUG) THEN   ! see 'before first unit conversion' above
        CALL Print_Global_Species_Kg( I_DBG, J_DBG, L_DBG,           &
                                                                'CO2', Input_Opt, State_Chm,   &
                                                                State_Grid, State_Met, trim(Iam) // &

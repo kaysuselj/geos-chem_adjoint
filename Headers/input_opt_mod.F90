@@ -491,6 +491,9 @@ MODULE Input_Opt_Mod
     ! and keeps the checkpoint values.
     INTEGER                     :: ADJ_CKPT_MODE
     LOGICAL                     :: ADJ_CKPT_VERIFY
+    ! GCHP.rc ADJ_DEBUG: 1 = per-step adjoint debug output (global sums with allreduces, the
+    ! test-cell values, species kg); default 0 (off; was always on before 2026-11-06)
+    LOGICAL                     :: ADJ_DEBUG
     ! mode 2: DELP_DRY read from the checkpoint at this step (first step of the window,
     ! where the forward DP_DRY_PREV came from the restart, not from the met)
     LOGICAL                     :: ADJ_CKPT_DELP_READ
@@ -1018,6 +1021,7 @@ CONTAINS
     Input_Opt%ADJ_SIMPLE_CONV          = .FALSE.
     Input_Opt%ADJ_CKPT_MODE            = 2
     Input_Opt%ADJ_CKPT_VERIFY          = .FALSE.
+    Input_Opt%ADJ_DEBUG                = .FALSE.
     Input_Opt%ADJ_CKPT_DELP_READ       = .FALSE.
 #endif
 
